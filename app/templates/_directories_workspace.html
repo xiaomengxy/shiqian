@@ -1,14 +1,26 @@
 {% from "_directory_tree.html" import render_directory_tree %}
 <section class="directory-console" id="directory-workspace" data-fragment="directories">
+  {% if error %}<p class="error directory-error">{{ error }}</p>{% endif %}
   <aside class="directory-tree-panel">
     <div class="panel-head">
       <h2>目录树</h2>
-      <span class="muted">{{ directories | length }} 个目录</span>
+      <span class="muted">
+        {% if directory_query %}{{ directories | length }} / {{ total_directory_count }} 个目录{% else %}{{ directories | length }} 个目录{% endif %}
+      </span>
     </div>
+    <form class="filters directory-filter" method="get" action="/directories" data-filter-form data-target="#directory-workspace">
+      <input type="hidden" name="selected" value="{{ selected_directory.id if selected_directory else '' }}">
+      <input class="search-input" name="query" value="{{ directory_query }}" placeholder="实时搜索目录">
+      {% if directory_query %}
+        <a class="button secondary" href="/directories" data-partial-link data-target="#directory-workspace">清空</a>
+      {% endif %}
+    </form>
     {% if directory_tree %}
       <ul class="directory-tree">
-        {{ render_directory_tree(directory_tree, selected_directory.id if selected_directory else None) }}
+        {{ render_directory_tree(directory_tree, selected_directory.id if selected_directory else None, directory_query) }}
       </ul>
+    {% elif directory_query %}
+      <p class="muted">没有匹配的目录。</p>
     {% else %}
       <p class="muted">目录为空，保存收藏时也会自动创建。</p>
     {% endif %}

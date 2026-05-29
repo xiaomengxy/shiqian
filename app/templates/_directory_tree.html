@@ -1,9 +1,9 @@
-{% macro render_directory_tree(nodes, selected_id) %}
+{% macro render_directory_tree(nodes, selected_id, query="") %}
   {% for node in nodes %}
     <li>
       <a
         class="tree-node {% if selected_id == node.id %}active{% endif %}"
-        href="/directories?selected={{ node.id }}"
+        href="/directories?selected={{ node.id }}{% if query %}&query={{ query|urlencode }}{% endif %}"
         data-partial-link
         data-target="#directory-workspace"
       >
@@ -12,7 +12,7 @@
       </a>
       {% if node.children %}
         <ul>
-          {{ render_directory_tree(node.children, selected_id) }}
+          {{ render_directory_tree(node.children, selected_id, query) }}
         </ul>
       {% endif %}
     </li>

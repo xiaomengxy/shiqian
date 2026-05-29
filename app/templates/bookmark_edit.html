@@ -5,7 +5,7 @@
   <div>
     <div class="section-kicker">Edit Item</div>
     <h1>编辑收藏</h1>
-    <p>{{ bookmark.source_type }}{% if bookmark.source_domain %} · {{ bookmark.source_domain }}{% endif %}{% if bookmark.parsed_at %} · 解析于 {{ bookmark.parsed_at.strftime("%Y-%m-%d %H:%M") }}{% endif %} · 收藏于 {{ bookmark.created_at.strftime("%Y-%m-%d %H:%M") }}{% if bookmark.updated_at and bookmark.updated_at != bookmark.created_at %} · 更新于 {{ bookmark.updated_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}</p>
+    <p>{{ bookmark.source_type }}{% if bookmark.source_domain %} · {{ bookmark.source_domain }}{% endif %}{% if bookmark.parsed_at %} · 解析于 {{ bookmark.parsed_at|local_datetime }}{% endif %} · 收藏于 {{ bookmark.created_at|local_datetime }}{% if bookmark.updated_at and bookmark.updated_at != bookmark.created_at %} · 更新于 {{ bookmark.updated_at|local_datetime }}{% endif %}</p>
   </div>
   <div class="toolbar compact-actions">
     <a class="button secondary" href="/bookmarks">返回收藏</a>

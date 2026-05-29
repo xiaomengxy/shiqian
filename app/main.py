@@ -29,10 +29,13 @@ from app.services.parser import fetch_and_extract
 from app.services.tags import get_or_create_tags, normalize_tags
 from app.services.items import InputItem, content_fingerprint, group_mixed_input, normalize_keywords, parse_mixed_input
 from app.services.settings_store import get_effective_settings, mask_secret, save_frontend_settings
+from app.services.time_display import local_datetime
 from app.services.urls import canonicalize_url, extract_urls
 
 
 BASE_DIR = Path(__file__).resolve().parent
+UNCATEGORIZED_PATH = "未分类"
+UNCATEGORIZED_FILTER = "__none__"
 
 
 @asynccontextmanager
@@ -45,6 +48,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="拾签", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+templates.env.filters["local_datetime"] = local_datetime
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -332,8 +336,14 @@ def purge_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/directories")
-def directories(request: Request, error: str = "", selected: int | None = None, db: Session = Depends(get_db)):
-    context = _directory_workspace_context(db, selected, error)
+def directories(
+    request: Request,
+    error: str = "",
+    selected: int | None = None,
+    query: str = "",
+    db: Session = Depends(get_db),
+):
+    context = _directory_workspace_context(db, selected, error, query)
     return templates.TemplateResponse(
         request,
         "directories.html",
@@ -346,17 +356,23 @@ def directories_partial(
     request: Request,
     selected: int | None = None,
     error: str = "",
+    query: str = "",
     db: Session = Depends(get_db),
 ):
     return templates.TemplateResponse(
         request,
         "_directories_workspace.html",
-        {"request": request, **_directory_workspace_context(db, selected, error)},
+        {"request": request, **_directory_workspace_context(db, selected, error, query)},
     )
 
 
 @app.post("/directories")
 def create_directory(path: str = Form(...), db: Session = Depends(get_db)):
+    if _is_uncategorized_path(path):
+        return RedirectResponse(
+            "/directories?error=未分类是系统内置归档入口，不需要创建目录。",
+            status_code=303,
+        )
     directory = get_or_create_directory_path(db, path)
     db.commit()
     return RedirectResponse(f"/directories?selected={directory.id}", status_code=303)
@@ -375,6 +391,9 @@ def create_child_directory(directory_id: int, name: str = Form(...), db: Session
 @app.post("/directories/{directory_id}/rename")
 def rename_directory_route(directory_id: int, name: str = Form(...), db: Session = Depends(get_db)):
     try:
+        directory = db.get(Directory, directory_id)
+        if directory and directory.parent_id is None and _is_uncategorized_path(name):
+            raise ValueError("未分类是系统内置归档入口，不需要创建目录。")
         rename_directory(db, directory_id, name)
         db.commit()
     except ValueError as exc:
@@ -386,6 +405,9 @@ def rename_directory_route(directory_id: int, name: str = Form(...), db: Session
 @app.post("/directories/{directory_id}/move")
 def move_directory_route(directory_id: int, parent_id: int | None = Form(None), db: Session = Depends(get_db)):
     try:
+        directory = db.get(Directory, directory_id)
+        if directory and parent_id is None and _is_uncategorized_path(directory.name):
+            raise ValueError("未分类是系统内置归档入口，不需要创建目录。")
         move_directory(db, directory_id, parent_id)
         db.commit()
     except ValueError as exc:
@@ -530,6 +552,9 @@ def get_job_api(job_id: int, db: Session = Depends(get_db)):
         "created_at": job.created_at.isoformat(),
         "parsed_at": job.parsed_at.isoformat() if job.parsed_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "created_at_display": local_datetime(job.created_at),
+        "parsed_at_display": local_datetime(job.parsed_at),
+        "updated_at_display": local_datetime(job.updated_at),
     }
 
 
@@ -643,7 +668,15 @@ def bookmarks_api(
                 cast(Bookmark.keywords, String).ilike(like),
             )
         )
-    if directory:
+    if _is_uncategorized_filter(directory):
+        stmt = stmt.outerjoin(Bookmark.directory).where(
+            or_(
+                Bookmark.directory_id.is_(None),
+                Directory.path == UNCATEGORIZED_PATH,
+                Directory.path.like(f"{UNCATEGORIZED_PATH}/%"),
+            )
+        )
+    elif directory:
         stmt = stmt.join(Bookmark.directory).where(Directory.path.like(f"{normalize_directory_path(directory)}%"))
     if tag:
         stmt = stmt.join(Bookmark.tags).where(Tag.name == tag)
@@ -664,6 +697,10 @@ def bookmarks_api(
                 "parsed_at": item.parsed_at.isoformat() if item.parsed_at else None,
                 "created_at": item.created_at.isoformat(),
                 "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                "last_opened_at_display": local_datetime(item.last_opened_at),
+                "parsed_at_display": local_datetime(item.parsed_at),
+                "created_at_display": local_datetime(item.created_at),
+                "updated_at_display": local_datetime(item.updated_at),
                 "content_type": item.content_type,
                 "directory": item.directory.path if item.directory else None,
                 "tags": [tag.name for tag in item.tags],
@@ -829,7 +866,9 @@ def _confirm_bookmark(
         raise HTTPException(status_code=404, detail="Completed job not found")
     extracted = job.extracted_json
     suggestion = _normalized_job_suggestion(db, job) or {}
-    directory = get_or_create_directory_path(db, directory_path or suggestion.get("recommended_directory_path") or "未分类")
+    directory = _bookmark_directory_from_path(
+        db, directory_path or suggestion.get("recommended_directory_path") or UNCATEGORIZED_PATH
+    )
     source_type = job.source_type or extracted.get("source_type") or "url"
     final_keywords = normalize_keywords(keywords or suggestion.get("keywords") or [])
     canonical_url = None
@@ -895,7 +934,7 @@ def _update_bookmark(
     if bookmark is None or bookmark.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Bookmark not found")
 
-    directory = get_or_create_directory_path(db, directory_path or "未分类")
+    directory = _bookmark_directory_from_path(db, directory_path or UNCATEGORIZED_PATH)
     bookmark.title = (name or "").strip() or bookmark.title
     bookmark.summary = (summary or "").strip()
     bookmark.raw_input = raw_input.strip() or bookmark.raw_input
@@ -983,23 +1022,36 @@ def _matching_bookmark_for_job(db: Session, job: ParseJob) -> Bookmark | None:
 
 
 def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str, sort: str) -> dict:
-    directory_items = db.scalars(select(Directory).order_by(Directory.path)).all()
+    directory_items = db.scalars(
+        select(Directory)
+        .where(Directory.path != UNCATEGORIZED_PATH, ~Directory.path.like(f"{UNCATEGORIZED_PATH}/%"))
+        .order_by(Directory.path)
+    ).all()
     direct_counts = _directory_bookmark_counts(db)
     directory_tree = _build_directory_tree(directory_items, direct_counts)
     items = _query_bookmarks(db, query=query, tag=tag, directory=directory, sort=sort)
     all_count = db.scalar(select(func.count(Bookmark.id)).where(Bookmark.deleted_at.is_(None))) or 0
     uncategorized_count = (
         db.scalar(
-            select(func.count(Bookmark.id)).where(Bookmark.deleted_at.is_(None), Bookmark.directory_id.is_(None))
+            select(func.count(Bookmark.id))
+            .outerjoin(Bookmark.directory)
+            .where(
+                Bookmark.deleted_at.is_(None),
+                or_(
+                    Bookmark.directory_id.is_(None),
+                    Directory.path == UNCATEGORIZED_PATH,
+                    Directory.path.like(f"{UNCATEGORIZED_PATH}/%"),
+                ),
+            )
         )
         or 0
     )
     current_directory = None
-    if directory and directory != "__none__":
+    if directory and not _is_uncategorized_filter(directory):
         current_directory = db.scalar(select(Directory).where(Directory.path == normalize_directory_path(directory)))
     view_title = "全部收藏"
-    if directory == "__none__":
-        view_title = "未分类"
+    if _is_uncategorized_filter(directory):
+        view_title = UNCATEGORIZED_PATH
     elif current_directory:
         view_title = current_directory.path
     if tag:
@@ -1039,8 +1091,14 @@ def _query_bookmarks(db: Session, *, query: str, tag: str, directory: str, sort:
                 cast(Bookmark.keywords, String).ilike(like),
             )
         )
-    if directory == "__none__":
-        stmt = stmt.where(Bookmark.directory_id.is_(None))
+    if _is_uncategorized_filter(directory):
+        stmt = stmt.outerjoin(Bookmark.directory).where(
+            or_(
+                Bookmark.directory_id.is_(None),
+                Directory.path == UNCATEGORIZED_PATH,
+                Directory.path.like(f"{UNCATEGORIZED_PATH}/%"),
+            )
+        )
     elif directory:
         stmt = stmt.join(Bookmark.directory).where(Directory.path.like(f"{normalize_directory_path(directory)}%"))
     if tag:
@@ -1078,6 +1136,21 @@ def _directory_bookmark_counts(db: Session) -> dict[int, int]:
     return {directory_id: count for directory_id, count in rows if directory_id is not None}
 
 
+def _bookmark_directory_from_path(db: Session, path: str) -> Directory | None:
+    if _is_uncategorized_path(path):
+        return None
+    return get_or_create_directory_path(db, path)
+
+
+def _is_uncategorized_path(path: str) -> bool:
+    normalized = normalize_directory_path(path)
+    return normalized == UNCATEGORIZED_PATH or normalized.startswith(f"{UNCATEGORIZED_PATH}/")
+
+
+def _is_uncategorized_filter(directory: str) -> bool:
+    return directory == UNCATEGORIZED_FILTER or (bool(directory) and _is_uncategorized_path(directory))
+
+
 def _build_directory_tree(directories: list[Directory], bookmark_counts: dict[int, int]) -> list[dict]:
     nodes = {
         directory.id: {
@@ -1111,13 +1184,23 @@ def _sum_directory_counts(node: dict) -> int:
     return total
 
 
-def _directory_workspace_context(db: Session, selected: int | None, error: str = "") -> dict:
-    directory_items = db.scalars(select(Directory).order_by(Directory.path)).all()
-    selected_directory = db.get(Directory, selected) if selected else (directory_items[0] if directory_items else None)
+def _directory_workspace_context(db: Session, selected: int | None, error: str = "", query: str = "") -> dict:
+    all_directories = db.scalars(
+        select(Directory)
+        .where(Directory.path != UNCATEGORIZED_PATH, ~Directory.path.like(f"{UNCATEGORIZED_PATH}/%"))
+        .order_by(Directory.path)
+    ).all()
+    directory_items = _filter_directory_items(all_directories, query)
+    visible_ids = {directory.id for directory in directory_items}
+    selected_directory = db.get(Directory, selected) if selected and selected in visible_ids else None
+    if selected_directory is None:
+        selected_directory = directory_items[0] if directory_items else None
     direct_counts = _directory_bookmark_counts(db)
     directory_tree = _build_directory_tree(directory_items, direct_counts)
     total_counts = _flatten_tree_counts(directory_tree)
     return {
+        "directory_query": query,
+        "total_directory_count": len(all_directories),
         "directories": directory_items,
         "directory_tree": directory_tree,
         "selected_directory": selected_directory,
@@ -1125,6 +1208,39 @@ def _directory_workspace_context(db: Session, selected: int | None, error: str =
         "total_bookmark_counts": total_counts,
         "error": error,
     }
+
+
+def _filter_directory_items(directories: list[Directory], query: str) -> list[Directory]:
+    term = query.strip().lower()
+    if not term:
+        return directories
+    by_id = {directory.id: directory for directory in directories}
+    children: dict[int, list[int]] = {}
+    for directory in directories:
+        if directory.parent_id in by_id:
+            children.setdefault(directory.parent_id, []).append(directory.id)
+
+    included: set[int] = set()
+
+    def include_descendants(directory_id: int) -> None:
+        for child_id in children.get(directory_id, []):
+            if child_id in included:
+                continue
+            included.add(child_id)
+            include_descendants(child_id)
+
+    for directory in directories:
+        if term not in directory.name.lower() and term not in directory.path.lower():
+            continue
+        current: Directory | None = directory
+        while current and current.id in by_id:
+            if current.id in included:
+                break
+            included.add(current.id)
+            current = by_id.get(current.parent_id) if current.parent_id else None
+        include_descendants(directory.id)
+
+    return [directory for directory in directories if directory.id in included]
 
 
 def _flatten_tree_counts(nodes: list[dict]) -> dict[int, int]:

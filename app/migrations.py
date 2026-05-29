@@ -13,6 +13,8 @@ def ensure_runtime_schema(engine: Engine) -> None:
         tables = set(inspect(conn).get_table_names())
         if "bookmarks" in tables:
             _ensure_bookmarks(conn)
+        if {"bookmarks", "directories"}.issubset(tables):
+            _merge_uncategorized_directory(conn)
         if "parse_jobs" in tables:
             _ensure_parse_jobs(conn)
         if "app_config" not in tables:
@@ -88,6 +90,17 @@ def _ensure_bookmarks(conn) -> None:
     conn.exec_driver_sql("ALTER TABLE bookmarks_new RENAME TO bookmarks")
     conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_bookmarks_source_domain ON bookmarks (source_domain)")
     conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
+def _merge_uncategorized_directory(conn) -> None:
+    row = conn.exec_driver_sql("SELECT id FROM directories WHERE path = '未分类'").fetchone()
+    if row is None:
+        return
+    directory_id = row[0]
+    conn.exec_driver_sql("UPDATE bookmarks SET directory_id = NULL WHERE directory_id = ?", (directory_id,))
+    child = conn.exec_driver_sql("SELECT id FROM directories WHERE parent_id = ? LIMIT 1", (directory_id,)).fetchone()
+    if child is None:
+        conn.exec_driver_sql("DELETE FROM directories WHERE id = ?", (directory_id,))
 
 
 def _ensure_parse_jobs(conn) -> None:

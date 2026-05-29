@@ -53,18 +53,18 @@
         {% if item.summary %}
           <p class="summary-preview">{{ item.summary }}</p>
         {% endif %}
-        <div class="meta">
+          <div class="meta">
           {% if item.source_domain %}<span>{{ item.source_domain }}</span>{% endif %}
           {% if item.parsed_at %}
-            <span>解析于 {{ item.parsed_at.strftime("%Y-%m-%d %H:%M") }}</span>
+            <span>解析于 {{ item.parsed_at|local_datetime }}</span>
           {% endif %}
-          <span>收藏于 {{ item.created_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          <span>收藏于 {{ item.created_at|local_datetime }}</span>
           {% if item.updated_at and item.updated_at != item.created_at %}
-            <span>更新于 {{ item.updated_at.strftime("%Y-%m-%d %H:%M") }}</span>
+            <span>更新于 {{ item.updated_at|local_datetime }}</span>
           {% endif %}
           {% if item.source_type == "url" %}
             <span>打开 {{ item.opened_count or 0 }} 次</span>
-            {% if item.last_opened_at %}<span>最近打开 {{ item.last_opened_at.strftime("%Y-%m-%d %H:%M") }}</span>{% endif %}
+            {% if item.last_opened_at %}<span>最近打开 {{ item.last_opened_at|local_datetime }}</span>{% endif %}
           {% endif %}
         </div>
         {% if item.tags %}

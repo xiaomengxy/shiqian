@@ -1,11 +1,12 @@
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
 from app.main import app
-from app.models import Base
+from app.migrations import ensure_runtime_schema
+from app.models import Base, Bookmark, Directory
 
 
 def _client_with_db():
@@ -21,7 +22,10 @@ def _client_with_db():
             session.close()
 
     app.dependency_overrides[get_db] = override_db
-    return TestClient(app)
+    client = TestClient(app)
+    client.test_engine = engine
+    client.TestingSession = TestingSession
+    return client
 
 
 def test_confirm_bookmark_api_creates_directory_and_bookmark(monkeypatch):
@@ -101,6 +105,9 @@ def test_confirm_bookmark_api_creates_directory_and_bookmark(monkeypatch):
         assert bookmarks[0]["parsed_at"]
         assert bookmarks[0]["created_at"]
         assert bookmarks[0]["updated_at"]
+        assert bookmarks[0]["parsed_at_display"]
+        assert bookmarks[0]["created_at_display"]
+        assert bookmarks[0]["updated_at_display"]
 
         opened = client.get(f"/bookmarks/{bookmarks[0]['id']}/open", follow_redirects=False)
         assert opened.status_code == 302
@@ -111,6 +118,103 @@ def test_confirm_bookmark_api_creates_directory_and_bookmark(monkeypatch):
         assert bookmarks[0]["last_opened_at"] is not None
     finally:
         app.dependency_overrides.clear()
+
+
+def test_uncategorized_confirm_and_edit_use_virtual_directory(monkeypatch):
+    def fake_generate(extracted, directories, provider, settings):
+        class Result:
+            provider = "rules"
+            model = "local"
+            error = None
+
+            def __init__(self):
+                self.suggestion = {
+                    "name": "Loose note",
+                    "summary": "Summary",
+                    "tags": ["待整理"],
+                    "keywords": ["loose"],
+                    "content_type": extracted["content_type"],
+                    "recommended_directory_path": "未分类",
+                    "directory_reason": "low confidence",
+                    "confidence": 0.4,
+                }
+
+        return Result()
+
+    monkeypatch.setattr("app.main.generate_suggestion", fake_generate)
+
+    try:
+        client = _client_with_db()
+        parsed = client.post("/api/items/parse", json={"input": "loose term"})
+        job_id = parsed.json()["jobs"][0]["id"]
+        detail = client.get(f"/api/jobs/{job_id}").json()
+
+        created = client.post(
+            "/api/bookmarks/confirm",
+            json={
+                "job_id": job_id,
+                "directory_path": "未分类",
+                "tags": detail["suggestion"]["tags"],
+                "keywords": detail["suggestion"]["keywords"],
+                "summary": detail["suggestion"]["summary"],
+                "name": detail["suggestion"]["name"],
+            },
+        )
+        assert created.status_code == 200
+        bookmark_id = created.json()["id"]
+
+        bookmarks = client.get("/api/bookmarks").json()["bookmarks"]
+        assert bookmarks[0]["directory"] is None
+        assert len(client.get("/api/bookmarks?directory=__none__").json()["bookmarks"]) == 1
+
+        updated = client.post(
+            f"/api/bookmarks/{bookmark_id}",
+            json={
+                "name": "Loose note edited",
+                "summary": "Edited summary",
+                "directory_path": "未分类/AI",
+                "tags": ["待整理"],
+                "keywords": ["loose"],
+                "raw_input": "loose term",
+            },
+        )
+        assert updated.status_code == 200
+        assert client.get("/api/bookmarks").json()["bookmarks"][0]["directory"] is None
+
+        with client.TestingSession() as session:
+            assert session.scalar(select(Directory).where(Directory.path == "未分类")) is None
+            assert session.scalar(select(Directory).where(Directory.path.like("未分类/%"))) is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_runtime_schema_merges_legacy_uncategorized_directory():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool, future=True)
+    Base.metadata.create_all(engine)
+    TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+
+    with TestingSession() as session:
+        directory = Directory(name="未分类", path="未分类", depth=0)
+        bookmark = Bookmark(
+            source_type="term",
+            raw_input="legacy term",
+            keywords=[],
+            title="Legacy term",
+            summary="Summary",
+            content_type="term",
+            source_domain="",
+            directory=directory,
+            status="saved",
+        )
+        session.add(bookmark)
+        session.commit()
+
+    ensure_runtime_schema(engine)
+
+    with TestingSession() as session:
+        bookmark = session.scalar(select(Bookmark).where(Bookmark.title == "Legacy term"))
+        assert bookmark.directory_id is None
+        assert session.scalar(select(Directory).where(Directory.path == "未分类")) is None
 
 
 def test_parse_items_api_handles_mixed_input_and_keyword_search(monkeypatch):
@@ -601,6 +705,11 @@ def test_bookmark_partials_filter_directory_and_tag(monkeypatch):
         directories = client.get("/directories/partials")
         assert directories.status_code == 200
         assert 'id="directory-workspace"' in directories.text
+
+        searched_directories = client.get("/directories/partials?query=AI")
+        assert searched_directories.status_code == 200
+        assert "技术/AI" in searched_directories.text
+        assert "技术/数据库" not in searched_directories.text
 
         trash = client.get("/trash/partials")
         assert trash.status_code == 200

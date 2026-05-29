@@ -6,6 +6,8 @@
     "/jobs": { partial: "/jobs/partials", target: "#jobs-list" },
   };
   let autoRefreshTimer = null;
+  let liveFilterTimer = null;
+  let liveFilterController = null;
 
   function asUrl(value) {
     return new URL(value, window.location.origin);
@@ -23,18 +25,100 @@
     return partialMap[url.pathname]?.target || null;
   }
 
-  async function replaceFragment(targetSelector, partialUrl, pushUrl) {
+  function captureFocus(target) {
+    const active = document.activeElement;
+    if (!active || !target.contains(active) || !active.name) return null;
+    return {
+      name: active.name,
+      selectionStart: active.selectionStart,
+      selectionEnd: active.selectionEnd,
+    };
+  }
+
+  function restoreFocus(state) {
+    if (!state) return;
+    const form = document.querySelector("[data-filter-form]");
+    const element = form?.elements?.[state.name];
+    if (!element || typeof element.focus !== "function") return;
+    element.focus();
+    if (
+      typeof element.setSelectionRange === "function" &&
+      Number.isInteger(state.selectionStart) &&
+      Number.isInteger(state.selectionEnd)
+    ) {
+      element.setSelectionRange(state.selectionStart, state.selectionEnd);
+    }
+  }
+
+  async function replaceFragment(targetSelector, partialUrl, nextUrl, options = {}) {
     const target = document.querySelector(targetSelector);
     if (!target || !partialUrl) return;
+    const focusState = options.preserveFocus ? captureFocus(target) : null;
     target.classList.add("is-loading");
-    const response = await fetch(partialUrl, { headers: { "X-Requested-With": "fetch" } });
-    if (!response.ok) throw new Error(await response.text());
-    const html = await response.text();
-    target.outerHTML = html;
-    setupAutoRefresh();
-    if (pushUrl) {
-      window.history.pushState({ target: targetSelector }, "", pushUrl);
+    try {
+      const response = await fetch(partialUrl, {
+        headers: { "X-Requested-With": "fetch" },
+        signal: options.signal,
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const html = await response.text();
+      target.outerHTML = html;
+      setupAutoRefresh();
+      restoreFocus(focusState);
+      if (nextUrl) {
+        const historyState = { target: targetSelector };
+        if (options.history === "replace") {
+          window.history.replaceState(historyState, "", nextUrl);
+        } else {
+          window.history.pushState(historyState, "", nextUrl);
+        }
+      }
+    } finally {
+      if (target.isConnected) {
+        target.classList.remove("is-loading");
+      }
     }
+  }
+
+  function abortLiveFilter() {
+    if (liveFilterController) {
+      liveFilterController.abort();
+      liveFilterController = null;
+    }
+  }
+
+  async function runLiveFilter(form) {
+    abortLiveFilter();
+    const controller = new AbortController();
+    liveFilterController = controller;
+    try {
+      await handleFilterForm(form, {
+        history: "replace",
+        preserveFocus: true,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        toast(messageFromError(error));
+      }
+    } finally {
+      if (liveFilterController === controller) {
+        liveFilterController = null;
+      }
+    }
+  }
+
+  function scheduleLiveFilter(form, delay = 300) {
+    window.clearTimeout(liveFilterTimer);
+    abortLiveFilter();
+    liveFilterTimer = window.setTimeout(() => {
+      if (form.isConnected) {
+        runLiveFilter(form);
+      } else {
+        const nextForm = document.querySelector("[data-filter-form]");
+        if (nextForm) runLiveFilter(nextForm);
+      }
+    }, delay);
   }
 
   function toast(message) {
@@ -75,14 +159,18 @@
     return true;
   }
 
-  async function handleFilterForm(form) {
+  function filterUrlFromForm(form) {
     const params = new URLSearchParams();
     new FormData(form).forEach((value, key) => {
       if (String(value).trim()) params.set(key, value);
     });
     const path = form.getAttribute("action") || window.location.pathname;
-    const url = `${path}${params.toString() ? `?${params.toString()}` : ""}`;
-    await replaceFragment(form.dataset.target || targetForUrl(url), partialUrlFrom(url), url);
+    return `${path}${params.toString() ? `?${params.toString()}` : ""}`;
+  }
+
+  async function handleFilterForm(form, options = {}) {
+    const url = filterUrlFromForm(form);
+    await replaceFragment(form.dataset.target || targetForUrl(url), partialUrlFrom(url), url, options);
   }
 
   async function handleAsyncForm(form) {
@@ -213,6 +301,22 @@
     } catch (error) {
       toast(messageFromError(error));
     }
+  });
+
+  document.addEventListener("input", (event) => {
+    const control = event.target;
+    if (!(control instanceof HTMLInputElement)) return;
+    const form = control.closest("[data-filter-form]");
+    if (!form || control.name !== "query") return;
+    scheduleLiveFilter(form, 300);
+  });
+
+  document.addEventListener("change", (event) => {
+    const control = event.target;
+    if (!(control instanceof HTMLSelectElement)) return;
+    const form = control.closest("[data-filter-form]");
+    if (!form) return;
+    scheduleLiveFilter(form, 0);
   });
 
   window.addEventListener("popstate", async () => {

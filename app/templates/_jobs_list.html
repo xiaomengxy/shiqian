@@ -51,11 +51,11 @@
       <details id="job-detail-{{ job.id }}" {% if job.status == "failed" %}open{% endif %}>
         <summary>任务详情</summary>
         <div class="job-detail-grid">
-          <span>提交解析 {{ job.created_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          <span>提交解析 {{ job.created_at|local_datetime }}</span>
           {% if job.parsed_at %}
-            <span>解析完成 {{ job.parsed_at.strftime("%Y-%m-%d %H:%M") }}</span>
+            <span>解析完成 {{ job.parsed_at|local_datetime }}</span>
           {% elif job.updated_at and job.status in ["failed", "processing"] %}
-            <span>状态更新 {{ job.updated_at.strftime("%Y-%m-%d %H:%M") }}</span>
+            <span>状态更新 {{ job.updated_at|local_datetime }}</span>
           {% endif %}
           <span>{{ job.provider or "local" }}{% if job.model %} · {{ job.model }}{% endif %}</span>
           {% if job.group_reason %}

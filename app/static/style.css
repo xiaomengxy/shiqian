@@ -360,6 +360,20 @@ button:hover,
   flex: 2 1 360px;
 }
 
+.directory-filter {
+  align-items: stretch;
+  margin: 12px 0 14px;
+}
+
+.directory-filter .search-input {
+  flex: 1 1 100%;
+}
+
+.directory-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .grid.two {
   display: grid;
   gap: 18px;

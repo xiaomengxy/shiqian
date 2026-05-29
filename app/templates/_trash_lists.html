@@ -14,6 +14,7 @@
             </div>
             <h3>{{ item.title }}</h3>
             <p class="muted">{{ item.summary }}</p>
+            {% if item.deleted_at %}<p class="muted">删除于 {{ item.deleted_at|local_datetime }}</p>{% endif %}
           </div>
           <div class="card-actions">
             <form method="post" action="/bookmarks/{{ item.id }}/restore" data-api-action="/api/bookmarks/{{ item.id }}/restore" data-api-method="POST" data-refresh-fragment="#trash-lists">
@@ -46,6 +47,7 @@
             </div>
             <h3>{{ job.raw_input or job.input_url }}</h3>
             {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
+            {% if job.deleted_at %}<p class="muted">删除于 {{ job.deleted_at|local_datetime }}</p>{% endif %}
           </div>
           <div class="card-actions">
             <form method="post" action="/jobs/{{ job.id }}/restore" data-api-action="/api/jobs/{{ job.id }}/restore" data-api-method="POST" data-refresh-fragment="#trash-lists">

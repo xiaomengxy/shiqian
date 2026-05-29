@@ -6,7 +6,7 @@
       <span class="tree-name">全部收藏</span>
       <span class="tree-count">{{ all_count }}</span>
     </a>
-    <a class="tree-node {% if directory_filter == '__none__' %}active{% endif %}" href="/bookmarks?directory=__none__" data-partial-link data-target="#bookmark-browser">
+    <a class="tree-node {% if directory_filter in ['__none__', '未分类'] %}active{% endif %}" href="/bookmarks?directory=__none__" data-partial-link data-target="#bookmark-browser">
       <span class="tree-name">未分类</span>
       <span class="tree-count">{{ uncategorized_count }}</span>
     </a>
