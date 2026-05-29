@@ -1,0 +1,57 @@
+{% from "_bookmark_tree.html" import render_bookmark_tree %}
+<section class="library-browser" id="bookmark-browser" data-fragment="bookmarks">
+  <aside class="library-sidebar">
+    <div class="section-kicker">Library</div>
+    <a class="tree-node {% if not directory_filter %}active{% endif %}" href="/bookmarks" data-partial-link data-target="#bookmark-browser">
+      <span class="tree-name">全部收藏</span>
+      <span class="tree-count">{{ all_count }}</span>
+    </a>
+    <a class="tree-node {% if directory_filter == '__none__' %}active{% endif %}" href="/bookmarks?directory=__none__" data-partial-link data-target="#bookmark-browser">
+      <span class="tree-name">未分类</span>
+      <span class="tree-count">{{ uncategorized_count }}</span>
+    </a>
+    {% if directory_tree %}
+      <ul class="directory-tree library-tree">
+        {{ render_bookmark_tree(directory_tree, directory_filter) }}
+      </ul>
+    {% else %}
+      <p class="muted">还没有目录。保存收藏时会自动生成。</p>
+    {% endif %}
+    <div class="sidebar-note">
+      <strong>目录</strong> 是主归档位置；<strong>标签</strong> 是跨目录主题。
+    </div>
+  </aside>
+
+  <section class="library-results">
+    <div class="library-results-head">
+      <div>
+        <div class="section-kicker">Browse</div>
+        <h2>{{ view_title }}</h2>
+        <p class="muted">当前显示 {{ bookmark_count }} 条收藏</p>
+      </div>
+      <a class="button" href="/">添加内容</a>
+    </div>
+
+    <form class="filters" method="get" action="/bookmarks" data-filter-form data-target="#bookmark-browser">
+      <input type="hidden" name="directory" value="{{ directory_filter }}">
+      <input class="search-input" name="query" value="{{ query }}" placeholder="搜索名称、简介、关键词、原文或链接">
+      <select name="tag" aria-label="标签筛选">
+        <option value="">全部标签</option>
+        {% for tag in tags %}
+          <option value="{{ tag.name }}" {% if tag.name == tag_filter %}selected{% endif %}>{{ tag.name }}</option>
+        {% endfor %}
+      </select>
+      <select name="sort" aria-label="排序">
+        <option value="updated" {% if sort == "updated" %}selected{% endif %}>最近更新</option>
+        <option value="opened" {% if sort == "opened" %}selected{% endif %}>最近打开</option>
+        <option value="open_count" {% if sort == "open_count" %}selected{% endif %}>打开次数</option>
+      </select>
+      <button type="submit">筛选</button>
+      {% if query or tag_filter or directory_filter %}
+        <a class="button secondary" href="/bookmarks" data-partial-link data-target="#bookmark-browser">清空</a>
+      {% endif %}
+    </form>
+
+    {% include "_bookmark_cards.html" %}
+  </section>
+</section>

@@ -1,66 +1,20 @@
 {% extends "base.html" %}
 {% block title %}拾签 · 解析队列{% endblock %}
 {% block content %}
-{% if has_active_jobs %}
-  <meta http-equiv="refresh" content="3">
-{% endif %}
 <section class="page-heading">
   <div>
     <div class="section-kicker">Queue</div>
     <h1>解析队列</h1>
-    <p>任务会在后台处理；有任务运行时，本页会自动刷新。</p>
+    <p>任务会在后台处理；确认保存后会标记为已保存，也可以清理进回收站。</p>
   </div>
-  <a class="button secondary" href="/">继续添加</a>
+  <div class="toolbar compact-actions">
+    <form method="post" action="/jobs/cleanup" data-async-form data-target="#jobs-list" data-confirm="把已完成、已保存和失败的任务移入回收站？">
+      <button class="secondary" type="submit">清理已结束</button>
+    </form>
+    <a class="button secondary" href="/trash">回收站</a>
+    <a class="button" href="/">继续添加</a>
+  </div>
 </section>
 
-<section class="panel">
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>内容</th>
-          <th>类型</th>
-          <th>进度</th>
-          <th>Provider</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for job in jobs %}
-          <tr>
-            <td>{{ job.id }}</td>
-            <td class="url-cell">{{ job.raw_input or job.input_url }}</td>
-            <td>{{ job.source_type }}</td>
-            <td class="progress-cell">
-              <div class="progress-line">
-                <span class="status {{ job.status }}">{{ job.status }}</span>
-                <span>{{ job.stage }}</span>
-                <strong>{{ job.progress_percent }}%</strong>
-              </div>
-              <div class="progress-track" aria-label="进度 {{ job.progress_percent }}%">
-                <div class="progress-fill {{ job.status }}" style="width: {{ job.progress_percent }}%"></div>
-              </div>
-              {% if job.error %}
-                <p class="error">{{ job.error }}</p>
-              {% endif %}
-            </td>
-            <td>{{ job.provider or "" }} {{ job.model or "" }}</td>
-            <td>
-              {% if job.status == "completed" %}
-                <a href="/review/{{ job.id }}">确认</a>
-              {% elif job.status == "failed" %}
-                <span class="muted">失败</span>
-              {% else %}
-                <span class="muted">处理中</span>
-              {% endif %}
-            </td>
-          </tr>
-        {% else %}
-          <tr><td colspan="6" class="muted">还没有解析任务。</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+{% include "_jobs_list.html" %}
 {% endblock %}

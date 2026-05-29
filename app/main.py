@@ -3,19 +3,20 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.database import SessionLocal, engine, get_db
 from app.migrations import ensure_runtime_schema
 from app.models import Base, Bookmark, Directory, ParseJob, Tag
-from app.schemas import ConfirmBookmarkRequest, ParseItemsRequest, ParseLinksRequest
+from app.schemas import ConfirmBookmarkRequest, ParseItemsRequest, ParseLinksRequest, SummaryRewriteRequest, UpdateBookmarkRequest
 from app.services.directories import (
     get_or_create_directory_path,
     list_directory_paths,
@@ -23,7 +24,7 @@ from app.services.directories import (
     normalize_directory_path,
     rename_directory,
 )
-from app.services.llm import generate_suggestion
+from app.services.llm import generate_suggestion, normalize_suggestion, rewrite_summary
 from app.services.parser import fetch_and_extract
 from app.services.tags import get_or_create_tags, normalize_tags
 from app.services.items import InputItem, content_fingerprint, normalize_keywords, parse_mixed_input
@@ -104,18 +105,72 @@ def jobs(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request,
         "jobs.html",
-        {
-            "jobs": _recent_jobs(db, limit=100),
-            "has_active_jobs": _has_active_jobs(db),
-        },
+        _jobs_context(db),
     )
+
+
+@app.get("/jobs/partials", response_class=HTMLResponse)
+def jobs_partial(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        request,
+        "_jobs_list.html",
+        {"request": request, **_jobs_context(db)},
+    )
+
+
+@app.post("/jobs/cleanup")
+def cleanup_jobs(db: Session = Depends(get_db)):
+    now = datetime.utcnow()
+    jobs = db.scalars(
+        select(ParseJob).where(ParseJob.deleted_at.is_(None), ParseJob.status.in_(["completed", "failed", "saved"]))
+    ).all()
+    for job in jobs:
+        job.deleted_at = now
+        job.updated_at = now
+    db.commit()
+    return RedirectResponse("/jobs", status_code=303)
+
+
+@app.post("/jobs/{job_id}/delete")
+def delete_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(ParseJob, job_id)
+    if job is None or job.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in ["pending", "processing"]:
+        raise HTTPException(status_code=400, detail="Running jobs cannot be deleted")
+    job.deleted_at = datetime.utcnow()
+    job.updated_at = job.deleted_at
+    db.commit()
+    return RedirectResponse("/jobs", status_code=303)
+
+
+@app.post("/jobs/{job_id}/restore")
+def restore_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(ParseJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job.deleted_at = None
+    job.updated_at = datetime.utcnow()
+    db.commit()
+    return RedirectResponse("/trash", status_code=303)
+
+
+@app.post("/jobs/{job_id}/purge")
+def purge_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(ParseJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    db.delete(job)
+    db.commit()
+    return RedirectResponse("/trash", status_code=303)
 
 
 @app.get("/review/{job_id}")
 def review(job_id: int, request: Request, db: Session = Depends(get_db)):
     job = db.get(ParseJob, job_id)
-    if job is None:
+    if job is None or job.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Job not found")
+    suggestion = _normalized_job_suggestion(db, job) or {}
     return templates.TemplateResponse(
         request,
         "review.html",
@@ -123,7 +178,7 @@ def review(job_id: int, request: Request, db: Session = Depends(get_db)):
             "request": request,
             "job": job,
             "extracted": job.extracted_json or {},
-            "suggestion": job.suggestion_json or {},
+            "suggestion": suggestion,
             "directories": db.scalars(select(Directory).order_by(Directory.path)).all(),
         },
     )
@@ -161,44 +216,34 @@ def bookmarks(
     sort: str = "updated",
     db: Session = Depends(get_db),
 ):
-    stmt = select(Bookmark).options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
-    if query:
-        like = f"%{query}%"
-        stmt = stmt.where(
-            or_(
-                Bookmark.title.ilike(like),
-                Bookmark.summary.ilike(like),
-                Bookmark.raw_input.ilike(like),
-                Bookmark.url.ilike(like),
-                cast(Bookmark.keywords, String).ilike(like),
-            )
-        )
-    if directory:
-        stmt = stmt.join(Bookmark.directory).where(Directory.path.like(f"{normalize_directory_path(directory)}%"))
-    if tag:
-        stmt = stmt.join(Bookmark.tags).where(Tag.name == tag)
-    stmt = _apply_bookmark_sort(stmt, sort)
-    items = db.scalars(stmt).unique().all()
+    context = _bookmark_browser_context(db, query, tag, directory, sort)
     return templates.TemplateResponse(
         request,
         "bookmarks.html",
-        {
-            "request": request,
-            "bookmarks": items,
-            "directories": db.scalars(select(Directory).order_by(Directory.path)).all(),
-            "tags": db.scalars(select(Tag).order_by(Tag.name)).all(),
-            "query": query,
-            "tag_filter": tag,
-            "directory_filter": directory,
-            "sort": sort,
-        },
+        {"request": request, **context},
+    )
+
+
+@app.get("/bookmarks/partials", response_class=HTMLResponse)
+def bookmarks_partial(
+    request: Request,
+    query: str = "",
+    tag: str = "",
+    directory: str = "",
+    sort: str = "updated",
+    db: Session = Depends(get_db),
+):
+    return templates.TemplateResponse(
+        request,
+        "_bookmarks_browser.html",
+        {"request": request, **_bookmark_browser_context(db, query, tag, directory, sort)},
     )
 
 
 @app.get("/bookmarks/{bookmark_id}/open")
 def open_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
     bookmark = db.get(Bookmark, bookmark_id)
-    if bookmark is None:
+    if bookmark is None or bookmark.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Bookmark not found")
     if bookmark.source_type != "url" or not bookmark.url:
         return RedirectResponse("/bookmarks", status_code=303)
@@ -208,24 +253,122 @@ def open_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
     return RedirectResponse(bookmark.url, status_code=302)
 
 
+@app.get("/bookmarks/{bookmark_id}/edit")
+def edit_bookmark_page(bookmark_id: int, request: Request, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None or bookmark.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    return templates.TemplateResponse(
+        request,
+        "bookmark_edit.html",
+        {
+            "request": request,
+            "bookmark": bookmark,
+            "directories": db.scalars(select(Directory).order_by(Directory.path)).all(),
+            "tag_text": ", ".join(tag.name for tag in bookmark.tags),
+            "keyword_text": ", ".join(bookmark.keywords or []),
+        },
+    )
+
+
+@app.post("/bookmarks/{bookmark_id}/edit")
+def update_bookmark_form(
+    bookmark_id: int,
+    name: str = Form(...),
+    summary: str = Form(...),
+    directory_path: str = Form(...),
+    tags: str = Form(""),
+    keywords: str = Form(""),
+    raw_input: str = Form(""),
+    url: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    _update_bookmark(
+        db,
+        bookmark_id,
+        name=name,
+        summary=summary,
+        directory_path=directory_path,
+        tags=normalize_tags(tags),
+        keywords=normalize_keywords(keywords),
+        raw_input=raw_input,
+        url=url or None,
+    )
+    return RedirectResponse("/bookmarks", status_code=303)
+
+
+@app.post("/bookmarks/{bookmark_id}/delete")
+def delete_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None or bookmark.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    bookmark.deleted_at = datetime.utcnow()
+    bookmark.updated_at = bookmark.deleted_at
+    db.commit()
+    return RedirectResponse("/bookmarks", status_code=303)
+
+
+@app.post("/bookmarks/{bookmark_id}/restore")
+def restore_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    bookmark.deleted_at = None
+    bookmark.updated_at = datetime.utcnow()
+    db.commit()
+    return RedirectResponse("/trash", status_code=303)
+
+
+@app.post("/bookmarks/{bookmark_id}/purge")
+def purge_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    bookmark.tags.clear()
+    db.delete(bookmark)
+    db.commit()
+    return RedirectResponse("/trash", status_code=303)
+
+
 @app.get("/directories")
-def directories(request: Request, error: str = "", db: Session = Depends(get_db)):
+def directories(request: Request, error: str = "", selected: int | None = None, db: Session = Depends(get_db)):
+    context = _directory_workspace_context(db, selected, error)
     return templates.TemplateResponse(
         request,
         "directories.html",
-        {
-            "request": request,
-            "directories": db.scalars(select(Directory).order_by(Directory.path)).all(),
-            "error": error,
-        },
+        {"request": request, **context},
+    )
+
+
+@app.get("/directories/partials", response_class=HTMLResponse)
+def directories_partial(
+    request: Request,
+    selected: int | None = None,
+    error: str = "",
+    db: Session = Depends(get_db),
+):
+    return templates.TemplateResponse(
+        request,
+        "_directories_workspace.html",
+        {"request": request, **_directory_workspace_context(db, selected, error)},
     )
 
 
 @app.post("/directories")
 def create_directory(path: str = Form(...), db: Session = Depends(get_db)):
-    get_or_create_directory_path(db, path)
+    directory = get_or_create_directory_path(db, path)
     db.commit()
-    return RedirectResponse("/directories", status_code=303)
+    return RedirectResponse(f"/directories?selected={directory.id}", status_code=303)
+
+
+@app.post("/directories/{directory_id}/children")
+def create_child_directory(directory_id: int, name: str = Form(...), db: Session = Depends(get_db)):
+    parent = db.get(Directory, directory_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    child = get_or_create_directory_path(db, f"{parent.path}/{name}")
+    db.commit()
+    return RedirectResponse(f"/directories?selected={child.id}", status_code=303)
 
 
 @app.post("/directories/{directory_id}/rename")
@@ -236,7 +379,7 @@ def rename_directory_route(directory_id: int, name: str = Form(...), db: Session
     except ValueError as exc:
         db.rollback()
         return RedirectResponse(f"/directories?error={str(exc)}", status_code=303)
-    return RedirectResponse("/directories", status_code=303)
+    return RedirectResponse(f"/directories?selected={directory_id}", status_code=303)
 
 
 @app.post("/directories/{directory_id}/move")
@@ -247,7 +390,25 @@ def move_directory_route(directory_id: int, parent_id: int | None = Form(None), 
     except ValueError as exc:
         db.rollback()
         return RedirectResponse(f"/directories?error={str(exc)}", status_code=303)
-    return RedirectResponse("/directories", status_code=303)
+    return RedirectResponse(f"/directories?selected={directory_id}", status_code=303)
+
+
+@app.get("/trash")
+def trash(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        request,
+        "trash.html",
+        {"request": request, **_trash_context(db)},
+    )
+
+
+@app.get("/trash/partials", response_class=HTMLResponse)
+def trash_partial(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        request,
+        "_trash_lists.html",
+        {"request": request, **_trash_context(db)},
+    )
 
 
 @app.get("/settings")
@@ -334,8 +495,9 @@ def parse_links_api(payload: ParseLinksRequest, db: Session = Depends(get_db)):
 @app.get("/api/jobs/{job_id}")
 def get_job_api(job_id: int, db: Session = Depends(get_db)):
     job = db.get(ParseJob, job_id)
-    if job is None:
+    if job is None or job.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Job not found")
+    _reconcile_saved_jobs(db, [job])
     return {
         "id": job.id,
         "input_url": job.input_url,
@@ -346,12 +508,84 @@ def get_job_api(job_id: int, db: Session = Depends(get_db)):
         "progress_percent": job.progress_percent,
         "error": job.error,
         "extracted": job.extracted_json,
-        "suggestion": job.suggestion_json,
+        "suggestion": _normalized_job_suggestion(db, job),
         "provider": job.provider,
         "model": job.model,
         "created_at": job.created_at.isoformat(),
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }
+
+
+@app.post("/api/jobs/{job_id}/summary/rewrite")
+def rewrite_job_summary_api(job_id: int, payload: SummaryRewriteRequest, db: Session = Depends(get_db)):
+    job = db.get(ParseJob, job_id)
+    if job is None or job.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in ["completed", "saved"]:
+        raise HTTPException(status_code=400, detail="Job is not ready for summary rewrite")
+    extracted = job.extracted_json or {}
+    suggestion = _normalized_job_suggestion(db, job) or {}
+    runtime_settings = get_effective_settings(db, settings)
+    result = rewrite_summary(
+        extracted,
+        suggestion,
+        payload.current_summary,
+        payload.length,
+        payload.style,
+        payload.provider,
+        runtime_settings,
+    )
+    next_suggestion = dict(job.suggestion_json or suggestion)
+    next_suggestion["summary"] = result.summary
+    if result.error:
+        next_suggestion["summary_rewrite_error"] = result.error
+    else:
+        next_suggestion.pop("summary_rewrite_error", None)
+    job.suggestion_json = next_suggestion
+    job.provider = result.provider or job.provider
+    job.model = result.model or job.model
+    job.updated_at = datetime.utcnow()
+    db.commit()
+    return {
+        "summary": result.summary,
+        "provider": result.provider,
+        "model": result.model,
+        "error": result.error,
+    }
+
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job_api(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(ParseJob, job_id)
+    if job is None or job.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in ["pending", "processing"]:
+        raise HTTPException(status_code=400, detail="Running jobs cannot be deleted")
+    job.deleted_at = datetime.utcnow()
+    job.updated_at = job.deleted_at
+    db.commit()
+    return {"id": job.id, "deleted_at": job.deleted_at.isoformat()}
+
+
+@app.post("/api/jobs/{job_id}/restore")
+def restore_job_api(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(ParseJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job.deleted_at = None
+    job.updated_at = datetime.utcnow()
+    db.commit()
+    return {"id": job.id, "restored": True}
+
+
+@app.delete("/api/jobs/{job_id}/purge")
+def purge_job_api(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(ParseJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    db.delete(job)
+    db.commit()
+    return {"id": job_id, "purged": True}
 
 
 @app.post("/api/bookmarks/confirm")
@@ -376,7 +610,11 @@ def bookmarks_api(
     sort: str = "updated",
     db: Session = Depends(get_db),
 ):
-    stmt = select(Bookmark).options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
+    stmt = (
+        select(Bookmark)
+        .options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
+        .where(Bookmark.deleted_at.is_(None))
+    )
     if query:
         like = f"%{query}%"
         stmt = stmt.where(
@@ -415,10 +653,59 @@ def bookmarks_api(
     }
 
 
+@app.post("/api/bookmarks/{bookmark_id}")
+def update_bookmark_api(bookmark_id: int, payload: UpdateBookmarkRequest, db: Session = Depends(get_db)):
+    bookmark = _update_bookmark(
+        db,
+        bookmark_id,
+        name=payload.name,
+        summary=payload.summary,
+        directory_path=payload.directory_path,
+        tags=payload.tags,
+        keywords=payload.keywords,
+        raw_input=payload.raw_input,
+        url=payload.url,
+    )
+    return {"id": bookmark.id, "updated": True}
+
+
+@app.delete("/api/bookmarks/{bookmark_id}")
+def delete_bookmark_api(bookmark_id: int, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None or bookmark.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    bookmark.deleted_at = datetime.utcnow()
+    bookmark.updated_at = bookmark.deleted_at
+    db.commit()
+    return {"id": bookmark.id, "deleted_at": bookmark.deleted_at.isoformat()}
+
+
+@app.post("/api/bookmarks/{bookmark_id}/restore")
+def restore_bookmark_api(bookmark_id: int, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    bookmark.deleted_at = None
+    bookmark.updated_at = datetime.utcnow()
+    db.commit()
+    return {"id": bookmark.id, "restored": True}
+
+
+@app.delete("/api/bookmarks/{bookmark_id}/purge")
+def purge_bookmark_api(bookmark_id: int, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    bookmark.tags.clear()
+    db.delete(bookmark)
+    db.commit()
+    return {"id": bookmark_id, "purged": True}
+
+
 @app.post("/api/bookmarks/{bookmark_id}/open")
 def open_bookmark_api(bookmark_id: int, db: Session = Depends(get_db)):
     bookmark = db.get(Bookmark, bookmark_id)
-    if bookmark is None:
+    if bookmark is None or bookmark.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Bookmark not found")
     bookmark.opened_count = (bookmark.opened_count or 0) + 1
     bookmark.last_opened_at = datetime.utcnow()
@@ -498,6 +785,12 @@ def _set_job_progress(db: Session, job: ParseJob, status: str, stage: str, progr
     db.commit()
 
 
+def _normalized_job_suggestion(db: Session, job: ParseJob) -> dict | None:
+    if not job.suggestion_json:
+        return None
+    return normalize_suggestion(job.suggestion_json, list_directory_paths(db))
+
+
 def _confirm_bookmark(
     db: Session,
     job_id: int,
@@ -511,7 +804,7 @@ def _confirm_bookmark(
     if job is None or not job.extracted_json:
         raise HTTPException(status_code=404, detail="Completed job not found")
     extracted = job.extracted_json
-    suggestion = job.suggestion_json or {}
+    suggestion = _normalized_job_suggestion(db, job) or {}
     directory = get_or_create_directory_path(db, directory_path or suggestion.get("recommended_directory_path") or "未分类")
     source_type = job.source_type or extracted.get("source_type") or "url"
     final_keywords = normalize_keywords(keywords or suggestion.get("keywords") or [])
@@ -547,6 +840,64 @@ def _confirm_bookmark(
         bookmark.raw_input = extracted.get("raw_input") or job.raw_input
         bookmark.keywords = final_keywords
         bookmark.directory = directory
+        bookmark.deleted_at = None
+    bookmark.tags = get_or_create_tags(db, tags)
+    job.status = "saved"
+    job.stage = "已保存到收藏"
+    job.progress_percent = 100
+    job.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(bookmark)
+    return bookmark
+
+
+def _update_bookmark(
+    db: Session,
+    bookmark_id: int,
+    *,
+    name: str,
+    summary: str,
+    directory_path: str,
+    tags: list[str],
+    keywords: list[str],
+    raw_input: str,
+    url: str | None,
+) -> Bookmark:
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None or bookmark.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+
+    directory = get_or_create_directory_path(db, directory_path or "未分类")
+    bookmark.title = (name or "").strip() or bookmark.title
+    bookmark.summary = (summary or "").strip()
+    bookmark.raw_input = raw_input.strip() or bookmark.raw_input
+    bookmark.keywords = normalize_keywords(keywords)
+    bookmark.directory = directory
+    bookmark.updated_at = datetime.utcnow()
+
+    if bookmark.source_type == "url":
+        final_url = (url or bookmark.url or "").strip()
+        if final_url:
+            canonical_url = canonicalize_url(final_url)
+            duplicate = db.scalar(
+                select(Bookmark).where(Bookmark.canonical_url == canonical_url, Bookmark.id != bookmark.id)
+            )
+            if duplicate:
+                raise HTTPException(status_code=400, detail="URL already exists")
+            bookmark.url = final_url
+            bookmark.canonical_url = canonical_url
+            bookmark.source_domain = urlparse(final_url).netloc.lower()
+            bookmark.raw_input = bookmark.raw_input or final_url
+    else:
+        new_hash = content_fingerprint(bookmark.source_type, bookmark.raw_input)
+        duplicate = db.scalar(select(Bookmark).where(Bookmark.content_hash == new_hash, Bookmark.id != bookmark.id))
+        if duplicate:
+            raise HTTPException(status_code=400, detail="Content already exists")
+        bookmark.content_hash = new_hash
+        bookmark.url = None
+        bookmark.canonical_url = None
+        bookmark.source_domain = ""
+
     bookmark.tags = get_or_create_tags(db, tags)
     db.commit()
     db.refresh(bookmark)
@@ -554,7 +905,118 @@ def _confirm_bookmark(
 
 
 def _recent_jobs(db: Session, limit: int) -> list[ParseJob]:
-    return list(db.scalars(select(ParseJob).order_by(ParseJob.created_at.desc()).limit(limit)).all())
+    jobs = list(
+        db.scalars(
+            select(ParseJob).where(ParseJob.deleted_at.is_(None)).order_by(ParseJob.created_at.desc()).limit(limit)
+        ).all()
+    )
+    _reconcile_saved_jobs(db, jobs)
+    return jobs
+
+
+def _jobs_context(db: Session) -> dict:
+    return {"jobs": _recent_jobs(db, limit=100), "has_active_jobs": _has_active_jobs(db)}
+
+
+def _reconcile_saved_jobs(db: Session, jobs: list[ParseJob]) -> None:
+    changed = False
+    for job in jobs:
+        if job.status != "completed":
+            continue
+        if _matching_bookmark_for_job(db, job) is None:
+            continue
+        job.status = "saved"
+        job.stage = "已保存到收藏"
+        job.progress_percent = 100
+        job.updated_at = datetime.utcnow()
+        changed = True
+    if changed:
+        db.commit()
+
+
+def _matching_bookmark_for_job(db: Session, job: ParseJob) -> Bookmark | None:
+    extracted = job.extracted_json or {}
+    source_type = job.source_type or extracted.get("source_type") or "url"
+    if source_type == "url":
+        url = extracted.get("canonical_url") or extracted.get("url") or job.raw_input or job.input_url
+        if not url:
+            return None
+        canonical_url = canonicalize_url(url)
+        return db.scalar(
+            select(Bookmark).where(Bookmark.deleted_at.is_(None), Bookmark.canonical_url == canonical_url)
+        )
+    raw_input = extracted.get("raw_input") or job.raw_input or job.input_url
+    if not raw_input:
+        return None
+    content_hash = content_fingerprint(source_type, raw_input)
+    return db.scalar(select(Bookmark).where(Bookmark.deleted_at.is_(None), Bookmark.content_hash == content_hash))
+
+
+def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str, sort: str) -> dict:
+    directory_items = db.scalars(select(Directory).order_by(Directory.path)).all()
+    direct_counts = _directory_bookmark_counts(db)
+    directory_tree = _build_directory_tree(directory_items, direct_counts)
+    items = _query_bookmarks(db, query=query, tag=tag, directory=directory, sort=sort)
+    all_count = db.scalar(select(func.count(Bookmark.id)).where(Bookmark.deleted_at.is_(None))) or 0
+    uncategorized_count = (
+        db.scalar(
+            select(func.count(Bookmark.id)).where(Bookmark.deleted_at.is_(None), Bookmark.directory_id.is_(None))
+        )
+        or 0
+    )
+    current_directory = None
+    if directory and directory != "__none__":
+        current_directory = db.scalar(select(Directory).where(Directory.path == normalize_directory_path(directory)))
+    view_title = "全部收藏"
+    if directory == "__none__":
+        view_title = "未分类"
+    elif current_directory:
+        view_title = current_directory.path
+    if tag:
+        view_title = f"{view_title} · #{tag}"
+    if query:
+        view_title = f"{view_title} · 搜索“{query}”"
+    return {
+        "bookmarks": items,
+        "bookmark_count": len(items),
+        "all_count": all_count,
+        "uncategorized_count": uncategorized_count,
+        "directories": directory_items,
+        "directory_tree": directory_tree,
+        "tags": db.scalars(select(Tag).order_by(Tag.name)).all(),
+        "query": query,
+        "tag_filter": tag,
+        "directory_filter": directory,
+        "sort": sort,
+        "view_title": view_title,
+    }
+
+
+def _query_bookmarks(db: Session, *, query: str, tag: str, directory: str, sort: str) -> list[Bookmark]:
+    stmt = (
+        select(Bookmark)
+        .options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
+        .where(Bookmark.deleted_at.is_(None))
+    )
+    if query:
+        like = f"%{query}%"
+        stmt = stmt.where(
+            or_(
+                Bookmark.title.ilike(like),
+                Bookmark.summary.ilike(like),
+                Bookmark.raw_input.ilike(like),
+                Bookmark.url.ilike(like),
+                cast(Bookmark.keywords, String).ilike(like),
+            )
+        )
+    if directory == "__none__":
+        stmt = stmt.where(Bookmark.directory_id.is_(None))
+    elif directory:
+        stmt = stmt.join(Bookmark.directory).where(Directory.path.like(f"{normalize_directory_path(directory)}%"))
+    if tag:
+        stmt = stmt.join(Bookmark.tags).where(Tag.name == tag)
+    stmt = _apply_bookmark_sort(stmt, sort)
+    return db.scalars(stmt).unique().all()
 
 
 def _apply_bookmark_sort(stmt, sort: str):
@@ -569,12 +1031,91 @@ def _has_active_jobs(db: Session) -> bool:
     return (
         db.scalar(
             select(ParseJob.id)
-            .where(ParseJob.status.in_(["pending", "processing"]))
+            .where(ParseJob.deleted_at.is_(None), ParseJob.status.in_(["pending", "processing"]))
             .order_by(ParseJob.created_at.desc())
             .limit(1)
         )
         is not None
     )
+
+
+def _directory_bookmark_counts(db: Session) -> dict[int, int]:
+    rows = db.execute(
+        select(Bookmark.directory_id, func.count(Bookmark.id))
+        .where(Bookmark.deleted_at.is_(None), Bookmark.directory_id.is_not(None))
+        .group_by(Bookmark.directory_id)
+    ).all()
+    return {directory_id: count for directory_id, count in rows if directory_id is not None}
+
+
+def _build_directory_tree(directories: list[Directory], bookmark_counts: dict[int, int]) -> list[dict]:
+    nodes = {
+        directory.id: {
+            "id": directory.id,
+            "name": directory.name,
+            "path": directory.path,
+            "depth": directory.depth,
+            "direct_count": bookmark_counts.get(directory.id, 0),
+            "count": bookmark_counts.get(directory.id, 0),
+            "children": [],
+        }
+        for directory in directories
+    }
+    roots: list[dict] = []
+    for directory in directories:
+        node = nodes[directory.id]
+        if directory.parent_id and directory.parent_id in nodes:
+            nodes[directory.parent_id]["children"].append(node)
+        else:
+            roots.append(node)
+    for root in roots:
+        _sum_directory_counts(root)
+    return roots
+
+
+def _sum_directory_counts(node: dict) -> int:
+    total = node["direct_count"]
+    for child in node["children"]:
+        total += _sum_directory_counts(child)
+    node["count"] = total
+    return total
+
+
+def _directory_workspace_context(db: Session, selected: int | None, error: str = "") -> dict:
+    directory_items = db.scalars(select(Directory).order_by(Directory.path)).all()
+    selected_directory = db.get(Directory, selected) if selected else (directory_items[0] if directory_items else None)
+    direct_counts = _directory_bookmark_counts(db)
+    directory_tree = _build_directory_tree(directory_items, direct_counts)
+    total_counts = _flatten_tree_counts(directory_tree)
+    return {
+        "directories": directory_items,
+        "directory_tree": directory_tree,
+        "selected_directory": selected_directory,
+        "bookmark_counts": direct_counts,
+        "total_bookmark_counts": total_counts,
+        "error": error,
+    }
+
+
+def _flatten_tree_counts(nodes: list[dict]) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    for node in nodes:
+        counts[node["id"]] = node["count"]
+        counts.update(_flatten_tree_counts(node["children"]))
+    return counts
+
+
+def _trash_context(db: Session) -> dict:
+    deleted_bookmarks = db.scalars(
+        select(Bookmark)
+        .options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
+        .where(Bookmark.deleted_at.is_not(None))
+        .order_by(Bookmark.deleted_at.desc())
+    ).all()
+    deleted_jobs = db.scalars(
+        select(ParseJob).where(ParseJob.deleted_at.is_not(None)).order_by(ParseJob.deleted_at.desc())
+    ).all()
+    return {"bookmarks": deleted_bookmarks, "jobs": deleted_jobs}
 
 
 def _extract_job_input(job: ParseJob) -> dict:

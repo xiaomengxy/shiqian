@@ -49,6 +49,7 @@ class Bookmark(Base):
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="saved")
     opened_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_opened_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -83,6 +84,7 @@ class ParseJob(Base):
     suggestion_json: Mapped[dict | None] = mapped_column(JSON)
     provider: Mapped[str | None] = mapped_column(String(40))
     model: Mapped[str | None] = mapped_column(String(120))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 回收站{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <div class="section-kicker">Trash</div>
+    <h1>回收站</h1>
+    <p>这里保存被移除的解析任务和收藏。恢复会回到原列表，永久删除不可撤销。</p>
+  </div>
+  <a class="button secondary" href="/bookmarks">返回资料库</a>
+</section>
+
+{% include "_trash_lists.html" %}
+{% endblock %}

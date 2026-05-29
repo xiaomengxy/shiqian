@@ -1,0 +1,56 @@
+<section class="job-list" id="jobs-list" data-fragment="jobs" {% if has_active_jobs %}data-auto-refresh="3"{% endif %}>
+  {% for job in jobs %}
+    <article class="job-card" data-card>
+      <div class="job-main">
+        <div class="type-line">
+          <span class="type-badge">{{ job.source_type }}</span>
+          <span>#{{ job.id }}</span>
+          <span>{{ job.provider or "local" }}{% if job.model %} · {{ job.model }}{% endif %}</span>
+        </div>
+        <h2>{{ job.raw_input or job.input_url }}</h2>
+        <div class="progress-line">
+          <span class="status {{ job.status }}">
+            {% if job.status == "completed" %}待确认{% elif job.status == "saved" %}已保存{% elif job.status == "failed" %}失败{% elif job.status == "processing" %}处理中{% else %}{{ job.status }}{% endif %}
+          </span>
+          <span>{{ job.stage }}</span>
+          <strong>{{ job.progress_percent }}%</strong>
+        </div>
+        <div class="progress-track" aria-label="进度 {{ job.progress_percent }}%">
+          <div class="progress-fill {{ job.status }}" style="width: {{ job.progress_percent }}%"></div>
+        </div>
+        {% if job.error %}
+          <p class="error">{{ job.error }}</p>
+        {% endif %}
+      </div>
+      <div class="card-actions job-actions">
+        {% if job.status == "completed" %}
+          <a class="button small" href="/review/{{ job.id }}">确认</a>
+        {% elif job.status == "saved" %}
+          <a class="button small secondary" href="/bookmarks">查看收藏</a>
+        {% elif job.status == "failed" %}
+          <span class="muted">处理失败</span>
+        {% else %}
+          <span class="muted">处理中</span>
+        {% endif %}
+        {% if job.status not in ["pending", "processing"] %}
+          <form
+            method="post"
+            action="/jobs/{{ job.id }}/delete"
+            data-api-action="/api/jobs/{{ job.id }}"
+            data-api-method="DELETE"
+            data-refresh-fragment="#jobs-list"
+            data-confirm="把这个解析任务移入回收站？"
+          >
+            <button class="small secondary danger-button" type="submit">删除</button>
+          </form>
+        {% endif %}
+      </div>
+    </article>
+  {% else %}
+    <div class="empty-state">
+      <h2>还没有解析任务</h2>
+      <p>先添加一个链接、词或段落，拾签会在这里显示整理进度。</p>
+      <a class="button" href="/">添加内容</a>
+    </div>
+  {% endfor %}
+</section>

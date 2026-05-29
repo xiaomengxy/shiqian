@@ -1,0 +1,20 @@
+{% macro render_bookmark_tree(nodes, selected_path) %}
+  {% for node in nodes %}
+    <li>
+      <a
+        class="tree-node {% if selected_path == node.path %}active{% endif %}"
+        href="/bookmarks?directory={{ node.path }}"
+        data-partial-link
+        data-target="#bookmark-browser"
+      >
+        <span class="tree-name">{{ node.name }}</span>
+        <span class="tree-count">{{ node.count }}</span>
+      </a>
+      {% if node.children %}
+        <ul>
+          {{ render_bookmark_tree(node.children, selected_path) }}
+        </ul>
+      {% endif %}
+    </li>
+  {% endfor %}
+{% endmacro %}

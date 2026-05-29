@@ -35,6 +35,8 @@ def _ensure_bookmarks(conn) -> None:
             conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN opened_count INTEGER NOT NULL DEFAULT 0")
         if "last_opened_at" not in column_names:
             conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN last_opened_at DATETIME")
+        if "deleted_at" not in column_names:
+            conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN deleted_at DATETIME")
         return
 
     conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
@@ -56,6 +58,7 @@ def _ensure_bookmarks(conn) -> None:
             status VARCHAR(40) NOT NULL,
             opened_count INTEGER NOT NULL DEFAULT 0,
             last_opened_at DATETIME,
+            deleted_at DATETIME,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             FOREIGN KEY(directory_id) REFERENCES directories (id)
@@ -67,12 +70,12 @@ def _ensure_bookmarks(conn) -> None:
         INSERT INTO bookmarks_new (
             id, url, canonical_url, content_hash, source_type, raw_input, keywords,
             title, summary, content_type, source_domain, directory_id, status,
-            opened_count, last_opened_at, created_at, updated_at
+            opened_count, last_opened_at, deleted_at, created_at, updated_at
         )
         SELECT
             id, url, canonical_url, NULL, 'url', COALESCE(url, ''), ?,
             title, summary, content_type, source_domain, directory_id, status,
-            0, NULL, created_at, updated_at
+            0, NULL, NULL, created_at, updated_at
         FROM bookmarks
         """,
         (json.dumps([]),),
@@ -103,6 +106,8 @@ def _ensure_parse_jobs(conn) -> None:
         now = datetime.utcnow().isoformat(sep=" ")
         conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN updated_at DATETIME")
         conn.exec_driver_sql("UPDATE parse_jobs SET updated_at = COALESCE(created_at, ?)", (now,))
+    if "deleted_at" not in columns:
+        conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN deleted_at DATETIME")
 
 
 def _ensure_app_config(conn) -> None:

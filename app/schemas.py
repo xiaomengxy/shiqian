@@ -19,3 +19,20 @@ class ConfirmBookmarkRequest(BaseModel):
     summary: str
     name: str | None = None
     title: str | None = None
+
+
+class UpdateBookmarkRequest(BaseModel):
+    name: str
+    summary: str
+    directory_path: str
+    tags: list[str] = []
+    keywords: list[str] = []
+    raw_input: str = ""
+    url: str | None = None
+
+
+class SummaryRewriteRequest(BaseModel):
+    length: str = "normal"
+    style: str = "note"
+    current_summary: str = ""
+    provider: str | None = None

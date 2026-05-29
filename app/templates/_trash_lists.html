@@ -1,0 +1,64 @@
+<section class="grid two" id="trash-lists" data-fragment="trash">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>已删除收藏</h2>
+      <span class="muted">{{ bookmarks | length }} 条</span>
+    </div>
+    <div class="trash-list">
+      {% for item in bookmarks %}
+        <article class="trash-row" data-card>
+          <div>
+            <div class="type-line">
+              <span class="type-badge">{{ item.source_type }}</span>
+              <span>{{ item.directory.path if item.directory else "未分类" }}</span>
+            </div>
+            <h3>{{ item.title }}</h3>
+            <p class="muted">{{ item.summary }}</p>
+          </div>
+          <div class="card-actions">
+            <form method="post" action="/bookmarks/{{ item.id }}/restore" data-api-action="/api/bookmarks/{{ item.id }}/restore" data-api-method="POST" data-refresh-fragment="#trash-lists">
+              <button class="small" type="submit">恢复</button>
+            </form>
+            <form method="post" action="/bookmarks/{{ item.id }}/purge" data-api-action="/api/bookmarks/{{ item.id }}/purge" data-api-method="DELETE" data-refresh-fragment="#trash-lists" data-confirm="永久删除这个收藏？此操作不可撤销。">
+              <button class="small secondary danger-button" type="submit">永久删除</button>
+            </form>
+          </div>
+        </article>
+      {% else %}
+        <p class="muted">没有已删除收藏。</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>已删除任务</h2>
+      <span class="muted">{{ jobs | length }} 条</span>
+    </div>
+    <div class="trash-list">
+      {% for job in jobs %}
+        <article class="trash-row" data-card>
+          <div>
+            <div class="type-line">
+              <span class="type-badge">{{ job.source_type }}</span>
+              <span>#{{ job.id }}</span>
+              <span>{{ job.status }}</span>
+            </div>
+            <h3>{{ job.raw_input or job.input_url }}</h3>
+            {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
+          </div>
+          <div class="card-actions">
+            <form method="post" action="/jobs/{{ job.id }}/restore" data-api-action="/api/jobs/{{ job.id }}/restore" data-api-method="POST" data-refresh-fragment="#trash-lists">
+              <button class="small" type="submit">恢复</button>
+            </form>
+            <form method="post" action="/jobs/{{ job.id }}/purge" data-api-action="/api/jobs/{{ job.id }}/purge" data-api-method="DELETE" data-refresh-fragment="#trash-lists" data-confirm="永久删除这个解析任务？此操作不可撤销。">
+              <button class="small secondary danger-button" type="submit">永久删除</button>
+            </form>
+          </div>
+        </article>
+      {% else %}
+        <p class="muted">没有已删除任务。</p>
+      {% endfor %}
+    </div>
+  </div>
+</section>

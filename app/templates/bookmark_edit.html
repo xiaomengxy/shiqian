@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 编辑收藏{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <div class="section-kicker">Edit Item</div>
+    <h1>编辑收藏</h1>
+    <p>{{ bookmark.source_type }}{% if bookmark.source_domain %} · {{ bookmark.source_domain }}{% endif %}</p>
+  </div>
+  <div class="toolbar compact-actions">
+    <a class="button secondary" href="/bookmarks">返回收藏</a>
+    {% if bookmark.source_type == "url" and bookmark.url %}
+      <a class="button" href="/bookmarks/{{ bookmark.id }}/open" target="_blank" rel="noreferrer">打开链接</a>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <form method="post" action="/bookmarks/{{ bookmark.id }}/edit" class="stack edit-form">
+    <label>名称<input name="name" value="{{ bookmark.title }}" required></label>
+    {% if bookmark.source_type == "url" %}
+      <label>链接<input name="url" value="{{ bookmark.url or '' }}" placeholder="https://example.com/article"></label>
+    {% endif %}
+    <label>简介<textarea name="summary" rows="5">{{ bookmark.summary }}</textarea></label>
+    <div class="grid two">
+      <label>标签<input name="tags" value="{{ tag_text }}" placeholder="AI, 工具, 资料"></label>
+      <label>关键词<input name="keywords" value="{{ keyword_text }}" placeholder="检索词，最多 8 个"></label>
+    </div>
+    <label>
+      多级目录路径
+      <input name="directory_path" list="directory-options" value="{{ bookmark.directory.path if bookmark.directory else '未分类' }}">
+    </label>
+    <datalist id="directory-options">
+      {% for directory in directories %}
+        <option value="{{ directory.path }}"></option>
+      {% endfor %}
+    </datalist>
+    <label>原始内容<textarea name="raw_input" rows="8">{{ bookmark.raw_input }}</textarea></label>
+    <div class="toolbar">
+      <button type="submit">保存修改</button>
+      <a class="button secondary" href="/bookmarks">取消</a>
+    </div>
+  </form>
+</section>
+{% endblock %}
