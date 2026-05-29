@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 收藏{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>收藏</h1>
+    <a class="button secondary" href="/">添加内容</a>
+  </div>
+  <form class="filters" method="get" action="/bookmarks">
+    <input name="query" value="{{ query }}" placeholder="搜索名称、简介、关键词、原文或链接">
+    <select name="directory">
+      <option value="">全部目录</option>
+      {% for directory in directories %}
+        <option value="{{ directory.path }}" {% if directory.path == directory_filter %}selected{% endif %}>{{ directory.path }}</option>
+      {% endfor %}
+    </select>
+    <select name="tag">
+      <option value="">全部标签</option>
+      {% for tag in tags %}
+        <option value="{{ tag.name }}" {% if tag.name == tag_filter %}selected{% endif %}>{{ tag.name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">筛选</button>
+  </form>
+</section>
+
+<section class="bookmark-list">
+  {% for item in bookmarks %}
+    <article class="bookmark-card">
+      <div>
+        <h2>
+          {% if item.source_type == "url" and item.url %}
+            <a href="{{ item.url }}" target="_blank" rel="noreferrer">{{ item.title }}</a>
+          {% else %}
+            {{ item.title }}
+          {% endif %}
+        </h2>
+      </div>
+      <div class="meta">
+        <span>{{ item.source_type }}</span>
+        <span>{{ item.directory.path if item.directory else "未分类" }}</span>
+        {% if item.source_domain %}<span>{{ item.source_domain }}</span>{% endif %}
+      </div>
+      <div class="tags">
+        {% for tag in item.tags %}
+          <a href="/bookmarks?tag={{ tag.name }}">{{ tag.name }}</a>
+        {% endfor %}
+      </div>
+      {% if item.keywords %}
+        <div class="keywords">
+          {% for keyword in item.keywords %}
+            <span>{{ keyword }}</span>
+          {% endfor %}
+        </div>
+      {% endif %}
+      <details>
+        <summary>查看简介</summary>
+        <p>{{ item.summary }}</p>
+        {% if item.raw_input %}
+          <pre class="raw-block">{{ item.raw_input }}</pre>
+        {% endif %}
+      </details>
+    </article>
+  {% else %}
+    <div class="panel"><p class="muted">还没有保存的收藏。</p></div>
+  {% endfor %}
+</section>
+{% endblock %}

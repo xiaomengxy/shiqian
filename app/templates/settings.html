@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 设置{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>设置</h1>
+    <p>修改 `.env` 后重启服务生效。</p>
+  </div>
+  <dl class="kv">
+    <dt>默认 Provider</dt><dd>{{ settings.llm_provider }}</dd>
+    <dt>OpenAI 模型</dt><dd>{{ settings.openai_model }}</dd>
+    <dt>OpenAI Key</dt><dd>{% if has_openai_key %}已配置{% else %}未配置{% endif %}</dd>
+    <dt>DeepSeek 模型</dt><dd>{{ settings.deepseek_model }}</dd>
+    <dt>DeepSeek Key</dt><dd>{% if has_deepseek_key %}已配置{% else %}未配置{% endif %}</dd>
+    <dt>数据库</dt><dd>{{ settings.database_url }}</dd>
+  </dl>
+</section>
+{% endblock %}

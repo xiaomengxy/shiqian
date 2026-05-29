@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 添加内容{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>添加内容</h1>
+    <p>把链接、词、短句或段落扔给拾签。它会拾起内容，自动命名、打标签、提取关键词，并推荐合适目录。</p>
+  </div>
+  <form method="post" action="/items/parse" class="stack">
+    <textarea name="input_text" rows="9" placeholder="https://example.com/article&#10;&#10;提示词工程&#10;&#10;这是一段想保存起来的想法或资料。"></textarea>
+    <div class="toolbar">
+      <label>
+        Provider
+        <select name="provider">
+          <option value="">默认：{{ settings.llm_provider }}</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="openai">OpenAI</option>
+        </select>
+      </label>
+      <button type="submit">开始整理</button>
+    </div>
+  </form>
+</section>
+
+<section class="grid two">
+  <div class="panel">
+    <h2>Provider 状态</h2>
+    <dl class="kv">
+      <dt>DeepSeek</dt><dd>{{ settings.deepseek_model }} · {% if has_deepseek_key %}已配置{% else %}未配置，使用规则降级{% endif %}</dd>
+      <dt>OpenAI</dt><dd>{{ settings.openai_model }} · {% if has_openai_key %}已配置{% else %}未配置，使用规则降级{% endif %}</dd>
+    </dl>
+  </div>
+  <div class="panel">
+    <h2>最近整理</h2>
+    {% if recent_jobs %}
+      <ul class="plain-list">
+        {% for job in recent_jobs %}
+          <li><a href="/review/{{ job.id }}">{{ job.raw_input or job.input_url }}</a><span>{{ job.source_type }} · {{ job.status }}</span></li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">还没有整理任务。</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 解析队列{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>解析队列</h1>
+    <a class="button secondary" href="/">继续添加</a>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>ID</th><th>内容</th><th>类型</th><th>状态</th><th>Provider</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for job in jobs %}
+          <tr>
+            <td>{{ job.id }}</td>
+            <td class="url-cell">{{ job.raw_input or job.input_url }}</td>
+            <td>{{ job.source_type }}</td>
+            <td><span class="status {{ job.status }}">{{ job.status }}</span></td>
+            <td>{{ job.provider or "" }} {{ job.model or "" }}</td>
+            <td>{% if job.status == "completed" %}<a href="/review/{{ job.id }}">确认</a>{% elif job.error %}{{ job.error }}{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

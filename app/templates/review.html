@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 确认收藏{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <h1>确认收藏</h1>
+      <p>{{ job.source_type }}{% if extracted.source_domain %} · {{ extracted.source_domain }}{% endif %} · {{ suggestion.content_type or extracted.content_type }}</p>
+    </div>
+    <a class="button secondary" href="/jobs">返回队列</a>
+  </div>
+  {% if job.status != "completed" %}
+    <p class="error">这个任务尚未完成：{{ job.status }} {{ job.error or "" }}</p>
+  {% else %}
+    {% if suggestion.llm_error %}
+      <p class="notice">模型调用未完成，已使用规则建议：{{ suggestion.llm_error }}</p>
+    {% endif %}
+    <form method="post" action="/bookmarks/confirm" class="stack">
+      <input type="hidden" name="job_id" value="{{ job.id }}">
+      <label>名称<input name="name" value="{{ suggestion.name or extracted.title }}"></label>
+      {% if job.source_type == "url" %}
+        <label>链接<input value="{{ extracted.canonical_url }}" readonly></label>
+      {% endif %}
+      <label>简介<textarea name="summary" rows="5">{{ suggestion.summary }}</textarea></label>
+      <label>标签<input name="tags" value="{{ suggestion.tags | join(', ') }}"></label>
+      <label>关键词<input name="keywords" value="{{ suggestion.keywords | join(', ') }}"></label>
+      <label>
+        多级目录路径
+        <input name="directory_path" list="directory-options" value="{{ suggestion.recommended_directory_path or '未分类' }}">
+      </label>
+      <datalist id="directory-options">
+        {% for directory in directories %}
+          <option value="{{ directory.path }}"></option>
+        {% endfor %}
+      </datalist>
+      <details>
+        <summary>原始内容</summary>
+        <pre class="raw-block">{{ extracted.raw_input or extracted.content or extracted.url }}</pre>
+      </details>
+      <p class="muted">{{ suggestion.directory_reason }}</p>
+      <div class="toolbar">
+        {% if job.source_type == "url" %}<a href="{{ extracted.url }}" target="_blank" rel="noreferrer">打开原链接</a>{% endif %}
+        <button type="submit">保存收藏</button>
+      </div>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}

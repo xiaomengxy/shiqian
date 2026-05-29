@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}拾签{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/">拾签</a>
+      <nav>
+        <a href="/">添加</a>
+        <a href="/jobs">解析队列</a>
+        <a href="/bookmarks">收藏</a>
+        <a href="/directories">目录</a>
+        <a href="/settings">设置</a>
+      </nav>
+    </header>
+    <main class="shell">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
