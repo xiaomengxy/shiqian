@@ -4,9 +4,8 @@
       <div class="bookmark-title-row">
         <div class="bookmark-title-block">
           <div class="type-line">
-            <span class="type-badge">{{ item.source_type }}</span>
+            <span class="type-badge">{% if item.source_type == "url" %}链接{% elif item.source_type == "term" %}词条{% else %}段落{% endif %}</span>
             <span>{{ item.directory.path if item.directory else "未分类" }}</span>
-            {% if item.source_domain %}<span>{{ item.source_domain }}</span>{% endif %}
           </div>
           <h2>
             {% if item.source_type == "url" and item.url %}
@@ -35,38 +34,53 @@
         </div>
       </div>
 
-      <p class="summary-preview">{{ item.summary }}</p>
-
-      <div class="meta">
-        {% if item.parsed_at %}
-          <span>解析于 {{ item.parsed_at.strftime("%Y-%m-%d %H:%M") }}</span>
-        {% endif %}
-        <span>收藏于 {{ item.created_at.strftime("%Y-%m-%d %H:%M") }}</span>
-        {% if item.updated_at and item.updated_at != item.created_at %}
-          <span>更新于 {{ item.updated_at.strftime("%Y-%m-%d %H:%M") }}</span>
-        {% endif %}
-        {% if item.source_type == "url" %}
-          <span>打开 {{ item.opened_count or 0 }} 次</span>
-          {% if item.last_opened_at %}<span>最近打开 {{ item.last_opened_at.strftime("%Y-%m-%d %H:%M") }}</span>{% endif %}
-        {% endif %}
-      </div>
-
-      <div class="tags">
-        {% for tag in item.tags %}
-          <a href="/bookmarks?tag={{ tag.name }}{% if directory_filter %}&directory={{ directory_filter }}{% endif %}" data-partial-link data-target="#bookmark-browser">{{ tag.name }}</a>
-        {% endfor %}
-      </div>
-
-      {% if item.keywords %}
-        <div class="keywords">
-          {% for keyword in item.keywords %}
-            <span>{{ keyword }}</span>
+      {% if item.tags or item.keywords %}
+        <div class="quick-chips" aria-label="快速标签">
+          {% for tag in item.tags[:2] %}
+            <a class="chip tag-chip" href="/bookmarks?tag={{ tag.name }}{% if directory_filter %}&directory={{ directory_filter }}{% endif %}" data-partial-link data-target="#bookmark-browser">#{{ tag.name }}</a>
           {% endfor %}
+          {% if item.tags|length > 2 %}
+            <span class="chip muted-chip">+{{ item.tags|length - 2 }} 标签</span>
+          {% endif %}
+          {% if item.keywords %}
+            <span class="chip keyword-chip">{{ item.keywords|length }} 关键词</span>
+          {% endif %}
         </div>
       {% endif %}
 
       <details>
-        <summary>查看详情</summary>
+        <summary>简介与详情</summary>
+        {% if item.summary %}
+          <p class="summary-preview">{{ item.summary }}</p>
+        {% endif %}
+        <div class="meta">
+          {% if item.source_domain %}<span>{{ item.source_domain }}</span>{% endif %}
+          {% if item.parsed_at %}
+            <span>解析于 {{ item.parsed_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          {% endif %}
+          <span>收藏于 {{ item.created_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          {% if item.updated_at and item.updated_at != item.created_at %}
+            <span>更新于 {{ item.updated_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          {% endif %}
+          {% if item.source_type == "url" %}
+            <span>打开 {{ item.opened_count or 0 }} 次</span>
+            {% if item.last_opened_at %}<span>最近打开 {{ item.last_opened_at.strftime("%Y-%m-%d %H:%M") }}</span>{% endif %}
+          {% endif %}
+        </div>
+        {% if item.tags %}
+          <div class="tags">
+            {% for tag in item.tags %}
+              <a href="/bookmarks?tag={{ tag.name }}{% if directory_filter %}&directory={{ directory_filter }}{% endif %}" data-partial-link data-target="#bookmark-browser">{{ tag.name }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if item.keywords %}
+          <div class="keywords">
+            {% for keyword in item.keywords %}
+              <span>{{ keyword }}</span>
+            {% endfor %}
+          </div>
+        {% endif %}
         {% if item.url %}
           <p class="muted">链接：<a href="/bookmarks/{{ item.id }}/open" target="_blank" rel="noreferrer">{{ item.url }}</a></p>
         {% endif %}

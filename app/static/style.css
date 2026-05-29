@@ -443,7 +443,20 @@ th {
   background: var(--accent-soft);
   border-radius: 999px;
   color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 750;
   padding: 4px 9px;
+}
+
+.status.pending,
+.status.processing {
+  background: rgba(49, 95, 75, 0.12);
+  color: var(--accent-strong);
+}
+
+.status.completed {
+  background: rgba(179, 146, 79, 0.22);
+  color: #735a1f;
 }
 
 .status.failed {
@@ -464,15 +477,21 @@ th {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 14px;
   gap: 8px;
   justify-content: space-between;
+}
+
+.progress-line strong {
+  color: var(--ink);
+  font-size: 13px;
 }
 
 .progress-track {
   background: #e6dfd0;
   border-radius: 999px;
-  height: 9px;
-  margin-top: 8px;
+  height: 8px;
   overflow: hidden;
 }
 
@@ -496,24 +515,45 @@ th {
 
 .job-list {
   display: grid;
-  gap: 13px;
+  gap: 12px;
 }
 
 .job-card {
-  align-items: stretch;
   background: rgba(255, 252, 244, 0.92);
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: var(--shadow);
   display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding: 18px 20px;
+  gap: 12px;
+  padding: 17px 20px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
-.job-main {
+.job-card:hover {
+  border-color: rgba(49, 95, 75, 0.24);
+  box-shadow: 0 24px 60px rgba(44, 38, 25, 0.13);
+  transform: translateY(-1px);
+}
+
+.job-card.completed {
+  border-color: rgba(179, 146, 79, 0.44);
+}
+
+.job-card.failed {
+  border-color: rgba(163, 58, 43, 0.32);
+}
+
+.job-card-top {
+  align-items: flex-start;
   display: grid;
-  gap: 10px;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.job-title-block,
+.job-progress {
+  display: grid;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -526,9 +566,64 @@ th {
   overflow-wrap: anywhere;
 }
 
+.job-card h2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.job-badges {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 7px;
+}
+
+.job-id {
+  color: var(--muted);
+}
+
 .job-actions {
   align-content: start;
   justify-content: flex-end;
+}
+
+.job-live {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 13px;
+  min-height: 34px;
+}
+
+.danger-link {
+  color: var(--danger);
+}
+
+.job-detail-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.job-detail-grid span {
+  background: rgba(229, 239, 232, 0.72);
+  border: 1px solid rgba(49, 95, 75, 0.08);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  font-size: 13px;
+  padding: 5px 9px;
+}
+
+.job-error {
+  margin: 0;
+}
+
+.job-raw {
+  margin: 0;
 }
 
 .bookmark-list {
@@ -538,8 +633,8 @@ th {
 
 .bookmark-card {
   display: grid;
-  gap: 12px;
-  padding: 20px 22px;
+  gap: 10px;
+  padding: 18px 22px;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
@@ -574,7 +669,7 @@ th {
 }
 
 .bookmark-card h2 {
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1.35;
   margin: 0;
 }
@@ -588,7 +683,7 @@ th {
 
 .bookmark-title-block {
   display: grid;
-  gap: 8px;
+  gap: 7px;
 }
 
 .type-line {
@@ -628,6 +723,44 @@ th {
   margin: 0;
 }
 
+.quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.chip {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  line-height: 1.2;
+  max-width: 180px;
+  min-height: 27px;
+  overflow: hidden;
+  padding: 4px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-chip {
+  background: rgba(229, 239, 232, 0.86);
+  border: 1px solid rgba(49, 95, 75, 0.08);
+  color: var(--accent-strong);
+}
+
+.keyword-chip {
+  background: var(--paper-strong);
+  border: 1px solid rgba(153, 123, 53, 0.16);
+  color: #6e5523;
+}
+
+.muted-chip {
+  background: rgba(250, 247, 239, 0.9);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
 .meta,
 .tags,
 .keywords {
@@ -654,6 +787,8 @@ th {
 
 details {
   border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
   padding-top: 10px;
 }
 

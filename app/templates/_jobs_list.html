@@ -1,71 +1,78 @@
 <section class="job-list" id="jobs-list" data-fragment="jobs" {% if has_active_jobs %}data-auto-refresh="3"{% endif %}>
   {% for job in jobs %}
-    <article class="job-card" data-card>
-      <div class="job-main">
-        <div class="type-line">
-          <span class="type-badge">{{ job.source_type }}</span>
-          <span>#{{ job.id }}</span>
-          <span>{{ job.provider or "local" }}{% if job.model %} · {{ job.model }}{% endif %}</span>
+    {% set raw_text = job.raw_input or job.input_url %}
+    {% set type_label = "链接" if job.source_type == "url" else ("词条" if job.source_type == "term" else "段落") %}
+    {% set status_label = "待确认" if job.status == "completed" else ("已保存" if job.status == "saved" else ("失败" if job.status == "failed" else ("处理中" if job.status == "processing" else ("等待中" if job.status == "pending" else job.status)))) %}
+    <article class="job-card {{ job.status }}" data-card>
+      <div class="job-card-top">
+        <div class="job-title-block">
+          <div class="job-badges">
+            <span class="type-badge">{{ type_label }}</span>
+            <span class="status {{ job.status }}">{{ status_label }}</span>
+            <span class="job-id">#{{ job.id }}</span>
+          </div>
+          <h2>{{ raw_text.splitlines()[0] if raw_text else "未命名任务" }}</h2>
         </div>
-        <h2>{{ job.raw_input or job.input_url }}</h2>
+        <div class="card-actions job-actions">
+          {% if job.status == "completed" %}
+            <a class="button small" href="/review/{{ job.id }}">确认</a>
+          {% elif job.status == "saved" %}
+            <a class="button small secondary" href="/bookmarks">查看收藏</a>
+          {% elif job.status == "failed" %}
+            <a class="button small secondary danger-link" href="#job-detail-{{ job.id }}">查看错误</a>
+          {% else %}
+            <span class="job-live">整理中</span>
+          {% endif %}
+          {% if job.status not in ["pending", "processing"] %}
+            <form
+              method="post"
+              action="/jobs/{{ job.id }}/delete"
+              data-api-action="/api/jobs/{{ job.id }}"
+              data-api-method="DELETE"
+              data-refresh-fragment="#jobs-list"
+              data-confirm="把这个解析任务移入回收站？"
+            >
+              <button class="small secondary danger-button" type="submit">删除</button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="job-progress">
         <div class="progress-line">
-          <span class="status {{ job.status }}">
-            {% if job.status == "completed" %}待确认{% elif job.status == "saved" %}已保存{% elif job.status == "failed" %}失败{% elif job.status == "processing" %}处理中{% else %}{{ job.status }}{% endif %}
-          </span>
           <span>{{ job.stage }}</span>
           <strong>{{ job.progress_percent }}%</strong>
         </div>
-        <div class="meta time-meta">
+        <div class="progress-track" aria-label="进度 {{ job.progress_percent }}%">
+          <div class="progress-fill {{ job.status }}" style="width: {{ job.progress_percent }}%"></div>
+        </div>
+      </div>
+
+      <details id="job-detail-{{ job.id }}" {% if job.status == "failed" %}open{% endif %}>
+        <summary>任务详情</summary>
+        <div class="job-detail-grid">
           <span>提交解析 {{ job.created_at.strftime("%Y-%m-%d %H:%M") }}</span>
           {% if job.parsed_at %}
             <span>解析完成 {{ job.parsed_at.strftime("%Y-%m-%d %H:%M") }}</span>
           {% elif job.updated_at and job.status in ["failed", "processing"] %}
             <span>状态更新 {{ job.updated_at.strftime("%Y-%m-%d %H:%M") }}</span>
           {% endif %}
-        </div>
-        {% if job.group_reason %}
-          <div class="meta group-meta">
-            <span>分组：{{ job.group_reason }}</span>
-            {% if job.group_confidence is not none %}
-              <span>{{ "%.0f"|format(job.group_confidence * 100) }}%</span>
-            {% endif %}
-            {% if job.grouping_source == "ai" %}
-              <span>AI 判疑</span>
-            {% elif job.grouping_source == "rules" %}
-              <span>规则判断</span>
-            {% endif %}
-          </div>
-        {% endif %}
-        <div class="progress-track" aria-label="进度 {{ job.progress_percent }}%">
-          <div class="progress-fill {{ job.status }}" style="width: {{ job.progress_percent }}%"></div>
+          <span>{{ job.provider or "local" }}{% if job.model %} · {{ job.model }}{% endif %}</span>
+          {% if job.group_reason %}
+            <span>
+              分组：{{ job.group_reason }}
+              {% if job.group_confidence is not none %} · {{ "%.0f"|format(job.group_confidence * 100) }}%{% endif %}
+              {% if job.grouping_source == "ai" %} · AI 判疑{% elif job.grouping_source == "rules" %} · 规则判断{% endif %}
+            </span>
+          {% endif %}
         </div>
         {% if job.error %}
-          <p class="error">{{ job.error }}</p>
+          <p class="error job-error">{{ job.error }}</p>
         {% endif %}
-      </div>
-      <div class="card-actions job-actions">
-        {% if job.status == "completed" %}
-          <a class="button small" href="/review/{{ job.id }}">确认</a>
-        {% elif job.status == "saved" %}
-          <a class="button small secondary" href="/bookmarks">查看收藏</a>
-        {% elif job.status == "failed" %}
-          <span class="muted">处理失败</span>
-        {% else %}
-          <span class="muted">处理中</span>
+        {% if raw_text %}
+          <pre class="raw-block job-raw">{{ raw_text }}</pre>
         {% endif %}
-        {% if job.status not in ["pending", "processing"] %}
-          <form
-            method="post"
-            action="/jobs/{{ job.id }}/delete"
-            data-api-action="/api/jobs/{{ job.id }}"
-            data-api-method="DELETE"
-            data-refresh-fragment="#jobs-list"
-            data-confirm="把这个解析任务移入回收站？"
-          >
-            <button class="small secondary danger-button" type="submit">删除</button>
-          </form>
-        {% endif %}
-      </div>
+      </details>
     </article>
   {% else %}
     <div class="empty-state">
