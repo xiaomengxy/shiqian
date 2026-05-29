@@ -3,16 +3,67 @@
 {% block content %}
 <section class="panel">
   <div class="panel-head">
-    <h1>设置</h1>
-    <p>修改 `.env` 后重启服务生效。</p>
+    <div>
+      <h1>设置</h1>
+      <p>在这里直接配置 OpenAI 或 DeepSeek。保存后下一次整理内容会立即使用新配置。</p>
+    </div>
   </div>
-  <dl class="kv">
-    <dt>默认 Provider</dt><dd>{{ settings.llm_provider }}</dd>
-    <dt>OpenAI 模型</dt><dd>{{ settings.openai_model }}</dd>
-    <dt>OpenAI Key</dt><dd>{% if has_openai_key %}已配置{% else %}未配置{% endif %}</dd>
-    <dt>DeepSeek 模型</dt><dd>{{ settings.deepseek_model }}</dd>
-    <dt>DeepSeek Key</dt><dd>{% if has_deepseek_key %}已配置{% else %}未配置{% endif %}</dd>
-    <dt>数据库</dt><dd>{{ settings.database_url }}</dd>
-  </dl>
+  {% if saved %}
+    <p class="notice">设置已保存。</p>
+  {% endif %}
+  <form method="post" action="/settings" class="stack">
+    <label>
+      默认 Provider
+      <select name="llm_provider">
+        <option value="deepseek" {% if settings.llm_provider == "deepseek" %}selected{% endif %}>DeepSeek</option>
+        <option value="openai" {% if settings.llm_provider == "openai" %}selected{% endif %}>OpenAI</option>
+      </select>
+    </label>
+
+    <div class="grid two">
+      <div class="settings-card">
+        <h2>DeepSeek</h2>
+        <label>
+          模型
+          <input name="deepseek_model" value="{{ settings.deepseek_model }}" placeholder="deepseek-v4-flash">
+        </label>
+        <label>
+          API Key
+          <input name="deepseek_api_key" type="password" placeholder="{% if has_deepseek_key %}保留当前：{{ deepseek_key_label }}{% else %}粘贴 DeepSeek API key{% endif %}">
+        </label>
+        <label class="checkline">
+          <input name="clear_deepseek_key" type="checkbox">
+          清除 DeepSeek API Key
+        </label>
+      </div>
+
+      <div class="settings-card">
+        <h2>OpenAI</h2>
+        <label>
+          模型
+          <input name="openai_model" value="{{ settings.openai_model }}" placeholder="gpt-5-mini">
+        </label>
+        <label>
+          API Key
+          <input name="openai_api_key" type="password" placeholder="{% if has_openai_key %}保留当前：{{ openai_key_label }}{% else %}粘贴 OpenAI API key{% endif %}">
+        </label>
+        <label class="checkline">
+          <input name="clear_openai_key" type="checkbox">
+          清除 OpenAI API Key
+        </label>
+      </div>
+    </div>
+
+    <dl class="kv">
+      <dt>DeepSeek Key</dt><dd>{{ deepseek_key_label }}</dd>
+      <dt>OpenAI Key</dt><dd>{{ openai_key_label }}</dd>
+      <dt>数据库</dt><dd>{{ settings.database_url }}</dd>
+    </dl>
+
+    <div class="toolbar">
+      <button type="submit">保存设置</button>
+      <a class="button secondary" href="/">返回添加</a>
+    </div>
+  </form>
 </section>
 {% endblock %}

@@ -86,6 +86,15 @@ def test_confirm_bookmark_api_creates_directory_and_bookmark(monkeypatch):
         assert bookmarks[0]["directory"] == "Resources/Web"
         assert bookmarks[0]["tags"] == ["resource"]
         assert bookmarks[0]["keywords"] == ["keyword"]
+        assert bookmarks[0]["opened_count"] == 0
+
+        opened = client.get(f"/bookmarks/{bookmarks[0]['id']}/open", follow_redirects=False)
+        assert opened.status_code == 302
+        assert opened.headers["location"] == "https://example.com/a"
+
+        bookmarks = client.get("/api/bookmarks?sort=open_count").json()["bookmarks"]
+        assert bookmarks[0]["opened_count"] == 1
+        assert bookmarks[0]["last_opened_at"] is not None
     finally:
         app.dependency_overrides.clear()
 
@@ -165,5 +174,59 @@ def test_parse_items_api_handles_mixed_input_and_keyword_search(monkeypatch):
         assert len(found) == 3
         assert any(item["url"] is None and item["source_type"] == "term" for item in found)
         assert any(item["url"] is None and item["source_type"] == "text" for item in found)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_frontend_settings_update_runtime_provider(monkeypatch):
+    captured = {}
+
+    def fake_generate(extracted, directories, provider, settings):
+        captured["provider"] = provider
+        captured["settings_provider"] = settings.llm_provider
+        captured["deepseek_key"] = settings.deepseek_api_key
+        captured["deepseek_model"] = settings.deepseek_model
+
+        class Result:
+            suggestion = {
+                "name": "Saved term",
+                "summary": "Summary",
+                "tags": ["term"],
+                "keywords": ["keyword"],
+                "content_type": "term",
+                "recommended_directory_path": "Inbox",
+                "directory_reason": "test",
+                "confidence": 1,
+            }
+            provider = "deepseek"
+            model = "custom-deepseek"
+            error = None
+
+        return Result()
+
+    monkeypatch.setattr("app.main.generate_suggestion", fake_generate)
+
+    try:
+        client = _client_with_db()
+        response = client.post(
+            "/settings",
+            data={
+                "llm_provider": "deepseek",
+                "deepseek_model": "custom-deepseek",
+                "deepseek_api_key": "sk-deepseek-test",
+                "openai_model": "gpt-test",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        parsed = client.post("/api/items/parse", json={"input": "runtime setting term"})
+        assert parsed.status_code == 200
+        assert captured == {
+            "provider": None,
+            "settings_provider": "deepseek",
+            "deepseek_key": "sk-deepseek-test",
+            "deepseek_model": "custom-deepseek",
+        }
     finally:
         app.dependency_overrides.clear()

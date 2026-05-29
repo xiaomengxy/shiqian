@@ -1,13 +1,15 @@
 :root {
   color-scheme: light;
-  --bg: #f6f5f2;
+  --bg: #f5f7f4;
   --panel: #ffffff;
   --ink: #202124;
   --muted: #667085;
-  --line: #dedbd2;
+  --line: #dfe4dd;
   --accent: #176b87;
   --accent-strong: #0f4d5f;
   --soft: #eef6f7;
+  --leaf: #5f7f45;
+  --warm: #f4efe4;
   --danger: #b42318;
   font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
 }
@@ -18,7 +20,9 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.78), rgba(255,255,255,0) 180px),
+    var(--bg);
   color: var(--ink);
 }
 
@@ -58,8 +62,46 @@ nav {
 
 .shell {
   margin: 0 auto;
-  max-width: 1180px;
+  max-width: 1120px;
   padding: 28px clamp(16px, 4vw, 40px) 56px;
+}
+
+.collection-hero {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding: 22px;
+}
+
+.collection-hero h1 {
+  margin-bottom: 6px;
+}
+
+.collection-hero p:last-child {
+  color: var(--muted);
+  margin: 0;
+}
+
+.eyebrow {
+  color: var(--leaf);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.filter-panel {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 18px;
+  padding: 14px;
 }
 
 .panel {
@@ -68,6 +110,26 @@ nav {
   border-radius: 8px;
   margin-bottom: 18px;
   padding: 22px;
+}
+
+.settings-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.checkline {
+  align-items: center;
+  color: var(--ink);
+  display: flex;
+  gap: 8px;
+}
+
+.checkline input {
+  min-height: auto;
+  width: auto;
 }
 
 .panel-head {
@@ -180,6 +242,10 @@ button:hover,
   flex: 1 1 220px;
 }
 
+.filters .search-input {
+  flex: 2 1 340px;
+}
+
 .grid.two {
   display: grid;
   gap: 18px;
@@ -248,9 +314,43 @@ td {
   color: var(--danger);
 }
 
+.progress-cell {
+  min-width: 260px;
+}
+
+.progress-line {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.progress-track {
+  background: #ebe8df;
+  border-radius: 999px;
+  height: 9px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  background: var(--accent);
+  height: 100%;
+  transition: width 0.25s ease;
+}
+
+.progress-fill.completed {
+  background: #2e7d32;
+}
+
+.progress-fill.failed {
+  background: var(--danger);
+}
+
 .bookmark-list {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .bookmark-card {
@@ -258,12 +358,59 @@ td {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  gap: 12px;
-  padding: 18px;
+  gap: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 8px 24px rgba(32, 33, 36, 0.04);
 }
 
 .bookmark-card h2 {
-  font-size: 20px;
+  font-size: 19px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.bookmark-title-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.bookmark-title-block {
+  display: grid;
+  gap: 7px;
+}
+
+.type-line {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.type-badge {
+  background: #e9f3ed;
+  border-radius: 999px;
+  color: var(--leaf);
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.small {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.summary-preview {
+  color: #3f4648;
+  margin: 0;
 }
 
 .meta,
@@ -280,17 +427,18 @@ td {
   background: var(--soft);
   border-radius: 999px;
   color: var(--accent-strong);
+  font-size: 13px;
   padding: 5px 9px;
 }
 
 .keywords span {
-  background: #f2efe6;
-  color: #5f542b;
+  background: var(--warm);
+  color: #635735;
 }
 
 details {
   border-top: 1px solid var(--line);
-  padding-top: 10px;
+  padding-top: 9px;
 }
 
 summary {
@@ -308,6 +456,14 @@ summary {
   padding: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.empty-state {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 28px;
+  text-align: center;
 }
 
 .directory-list {
@@ -340,6 +496,15 @@ summary {
   .grid.two,
   .directory-row {
     grid-template-columns: 1fr;
+  }
+
+  .collection-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .bookmark-title-row {
+    flex-direction: column;
   }
 
   .kv {

@@ -25,6 +25,8 @@ Copy-Item .env.example .env
 
 ## 配置
 
+可以打开 `/settings` 在前端直接配置默认 provider、模型和 API key；这些值会保存到本地 SQLite，优先于 `.env` 生效。
+
 - `LLM_PROVIDER`: `openai` 或 `deepseek`
 - `OPENAI_API_KEY` / `OPENAI_MODEL`
 - `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL`

@@ -47,6 +47,8 @@ class Bookmark(Base):
     source_domain: Mapped[str] = mapped_column(String(255), index=True, nullable=False, default="")
     directory_id: Mapped[int | None] = mapped_column(ForeignKey("directories.id"))
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="saved")
+    opened_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_opened_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -74,9 +76,24 @@ class ParseJob(Base):
     source_type: Mapped[str] = mapped_column(String(20), nullable=False, default="url")
     raw_input: Mapped[str] = mapped_column(Text, nullable=False, default="")
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
+    stage: Mapped[str] = mapped_column(String(120), nullable=False, default="等待处理")
+    progress_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(Text)
     extracted_json: Mapped[dict | None] = mapped_column(JSON)
     suggestion_json: Mapped[dict | None] = mapped_column(JSON)
     provider: Mapped[str | None] = mapped_column(String(40))
     model: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
+class AppConfig(Base):
+    __tablename__ = "app_config"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )

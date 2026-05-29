@@ -1,24 +1,34 @@
 {% extends "base.html" %}
 {% block title %}拾签 · 收藏{% endblock %}
 {% block content %}
-<section class="panel">
-  <div class="panel-head">
+<section class="collection-hero">
+  <div>
+    <p class="eyebrow">Collection</p>
     <h1>收藏</h1>
-    <a class="button secondary" href="/">添加内容</a>
+    <p>按目录、标签和关键词快速找回你拾起的链接、词条和段落。</p>
   </div>
+  <a class="button" href="/">添加内容</a>
+</section>
+
+<section class="filter-panel">
   <form class="filters" method="get" action="/bookmarks">
-    <input name="query" value="{{ query }}" placeholder="搜索名称、简介、关键词、原文或链接">
-    <select name="directory">
+    <input class="search-input" name="query" value="{{ query }}" placeholder="搜索名称、简介、关键词、原文或链接">
+    <select name="directory" aria-label="目录筛选">
       <option value="">全部目录</option>
       {% for directory in directories %}
         <option value="{{ directory.path }}" {% if directory.path == directory_filter %}selected{% endif %}>{{ directory.path }}</option>
       {% endfor %}
     </select>
-    <select name="tag">
+    <select name="tag" aria-label="标签筛选">
       <option value="">全部标签</option>
       {% for tag in tags %}
         <option value="{{ tag.name }}" {% if tag.name == tag_filter %}selected{% endif %}>{{ tag.name }}</option>
       {% endfor %}
+    </select>
+    <select name="sort" aria-label="排序">
+      <option value="updated" {% if sort == "updated" %}selected{% endif %}>最近更新</option>
+      <option value="opened" {% if sort == "opened" %}selected{% endif %}>最近打开</option>
+      <option value="open_count" {% if sort == "open_count" %}selected{% endif %}>打开次数</option>
     </select>
     <button type="submit">筛选</button>
   </form>
@@ -27,25 +37,44 @@
 <section class="bookmark-list">
   {% for item in bookmarks %}
     <article class="bookmark-card">
-      <div>
-        <h2>
-          {% if item.source_type == "url" and item.url %}
-            <a href="{{ item.url }}" target="_blank" rel="noreferrer">{{ item.title }}</a>
-          {% else %}
-            {{ item.title }}
-          {% endif %}
-        </h2>
+      <div class="bookmark-title-row">
+        <div class="bookmark-title-block">
+          <div class="type-line">
+            <span class="type-badge">{{ item.source_type }}</span>
+            <span>{{ item.directory.path if item.directory else "未分类" }}</span>
+            {% if item.source_domain %}<span>{{ item.source_domain }}</span>{% endif %}
+          </div>
+          <h2>
+            {% if item.source_type == "url" and item.url %}
+              <a href="/bookmarks/{{ item.id }}/open" target="_blank" rel="noreferrer">{{ item.title }}</a>
+            {% else %}
+              {{ item.title }}
+            {% endif %}
+          </h2>
+        </div>
+        {% if item.source_type == "url" and item.url %}
+          <div class="card-actions">
+            <a class="button small" href="/bookmarks/{{ item.id }}/open" target="_blank" rel="noreferrer">打开</a>
+            <button class="small secondary copy-link" type="button" data-url="{{ item.url }}">复制链接</button>
+          </div>
+        {% endif %}
       </div>
+
+      <p class="summary-preview">{{ item.summary }}</p>
+
       <div class="meta">
-        <span>{{ item.source_type }}</span>
-        <span>{{ item.directory.path if item.directory else "未分类" }}</span>
-        {% if item.source_domain %}<span>{{ item.source_domain }}</span>{% endif %}
+        {% if item.source_type == "url" %}
+          <span>打开 {{ item.opened_count or 0 }} 次</span>
+          {% if item.last_opened_at %}<span>最近打开 {{ item.last_opened_at.strftime("%Y-%m-%d %H:%M") }}</span>{% endif %}
+        {% endif %}
       </div>
+
       <div class="tags">
         {% for tag in item.tags %}
           <a href="/bookmarks?tag={{ tag.name }}">{{ tag.name }}</a>
         {% endfor %}
       </div>
+
       {% if item.keywords %}
         <div class="keywords">
           {% for keyword in item.keywords %}
@@ -53,16 +82,41 @@
           {% endfor %}
         </div>
       {% endif %}
+
       <details>
-        <summary>查看简介</summary>
-        <p>{{ item.summary }}</p>
+        <summary>查看详情</summary>
+        {% if item.url %}
+          <p class="muted">链接：<a href="/bookmarks/{{ item.id }}/open" target="_blank" rel="noreferrer">{{ item.url }}</a></p>
+        {% endif %}
         {% if item.raw_input %}
           <pre class="raw-block">{{ item.raw_input }}</pre>
         {% endif %}
       </details>
     </article>
   {% else %}
-    <div class="panel"><p class="muted">还没有保存的收藏。</p></div>
+    <div class="empty-state">
+      <h2>还没有收藏</h2>
+      <p>先添加一个链接、词或段落，拾签会帮你整理好。</p>
+      <a class="button" href="/">添加内容</a>
+    </div>
   {% endfor %}
 </section>
+
+<script>
+  document.querySelectorAll(".copy-link").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const url = button.dataset.url;
+      try {
+        await navigator.clipboard.writeText(url);
+        const original = button.textContent;
+        button.textContent = "已复制";
+        setTimeout(() => {
+          button.textContent = original;
+        }, 1200);
+      } catch {
+        window.prompt("复制链接", url);
+      }
+    });
+  });
+</script>
 {% endblock %}

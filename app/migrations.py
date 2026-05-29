@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from sqlalchemy import Engine, inspect, text
 
@@ -14,6 +15,8 @@ def ensure_runtime_schema(engine: Engine) -> None:
             _ensure_bookmarks(conn)
         if "parse_jobs" in tables:
             _ensure_parse_jobs(conn)
+        if "app_config" not in tables:
+            _ensure_app_config(conn)
 
 
 def _ensure_bookmarks(conn) -> None:
@@ -27,6 +30,11 @@ def _ensure_bookmarks(conn) -> None:
         or columns.get("canonical_url", [None, None, None, 0])[3] == 1
     )
     if not needs_rebuild:
+        column_names = set(columns)
+        if "opened_count" not in column_names:
+            conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN opened_count INTEGER NOT NULL DEFAULT 0")
+        if "last_opened_at" not in column_names:
+            conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN last_opened_at DATETIME")
         return
 
     conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
@@ -46,6 +54,8 @@ def _ensure_bookmarks(conn) -> None:
             source_domain VARCHAR(255) NOT NULL,
             directory_id INTEGER,
             status VARCHAR(40) NOT NULL,
+            opened_count INTEGER NOT NULL DEFAULT 0,
+            last_opened_at DATETIME,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             FOREIGN KEY(directory_id) REFERENCES directories (id)
@@ -56,11 +66,13 @@ def _ensure_bookmarks(conn) -> None:
         """
         INSERT INTO bookmarks_new (
             id, url, canonical_url, content_hash, source_type, raw_input, keywords,
-            title, summary, content_type, source_domain, directory_id, status, created_at, updated_at
+            title, summary, content_type, source_domain, directory_id, status,
+            opened_count, last_opened_at, created_at, updated_at
         )
         SELECT
             id, url, canonical_url, NULL, 'url', COALESCE(url, ''), ?,
-            title, summary, content_type, source_domain, directory_id, status, created_at, updated_at
+            title, summary, content_type, source_domain, directory_id, status,
+            0, NULL, created_at, updated_at
         FROM bookmarks
         """,
         (json.dumps([]),),
@@ -78,4 +90,28 @@ def _ensure_parse_jobs(conn) -> None:
     if "raw_input" not in columns:
         conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN raw_input TEXT NOT NULL DEFAULT ''")
         conn.exec_driver_sql("UPDATE parse_jobs SET raw_input = input_url WHERE raw_input = ''")
+    if "stage" not in columns:
+        conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN stage VARCHAR(120) NOT NULL DEFAULT '等待处理'")
+        conn.exec_driver_sql("UPDATE parse_jobs SET stage = '等待确认' WHERE status = 'completed'")
+        conn.exec_driver_sql("UPDATE parse_jobs SET stage = '处理失败' WHERE status = 'failed'")
+    if "progress_percent" not in columns:
+        conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN progress_percent INTEGER NOT NULL DEFAULT 0")
+        conn.exec_driver_sql(
+            "UPDATE parse_jobs SET progress_percent = CASE WHEN status = 'completed' THEN 100 WHEN status = 'failed' THEN 100 ELSE 0 END"
+        )
+    if "updated_at" not in columns:
+        now = datetime.utcnow().isoformat(sep=" ")
+        conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN updated_at DATETIME")
+        conn.exec_driver_sql("UPDATE parse_jobs SET updated_at = COALESCE(created_at, ?)", (now,))
 
+
+def _ensure_app_config(conn) -> None:
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS app_config (
+            key VARCHAR(120) NOT NULL PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at DATETIME NOT NULL
+        )
+        """
+    )

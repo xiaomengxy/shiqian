@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -11,7 +12,7 @@ from sqlalchemy import String, cast, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
-from app.database import engine, get_db
+from app.database import SessionLocal, engine, get_db
 from app.migrations import ensure_runtime_schema
 from app.models import Base, Bookmark, Directory, ParseJob, Tag
 from app.schemas import ConfirmBookmarkRequest, ParseItemsRequest, ParseLinksRequest
@@ -26,6 +27,7 @@ from app.services.llm import generate_suggestion
 from app.services.parser import fetch_and_extract
 from app.services.tags import get_or_create_tags, normalize_tags
 from app.services.items import InputItem, content_fingerprint, normalize_keywords, parse_mixed_input
+from app.services.settings_store import get_effective_settings, mask_secret, save_frontend_settings
 from app.services.urls import canonicalize_url, extract_urls
 
 
@@ -51,21 +53,23 @@ def favicon() -> Response:
 
 @app.get("/")
 def index(request: Request, db: Session = Depends(get_db)):
+    runtime_settings = get_effective_settings(db, settings)
     return templates.TemplateResponse(
         request,
         "index.html",
         {
             "request": request,
-            "settings": settings,
+            "settings": runtime_settings,
             "recent_jobs": _recent_jobs(db, limit=5),
-            "has_openai_key": bool(settings.openai_api_key),
-            "has_deepseek_key": bool(settings.deepseek_api_key),
+            "has_openai_key": bool(runtime_settings.openai_api_key),
+            "has_deepseek_key": bool(runtime_settings.deepseek_api_key),
         },
     )
 
 
 @app.post("/items/parse")
 def parse_items_form(
+    background_tasks: BackgroundTasks,
     input_text: str = Form(...),
     provider: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -75,12 +79,13 @@ def parse_items_form(
         raise HTTPException(status_code=400, detail="No content found")
     for item in items:
         job = _create_job(db, item, provider)
-        _process_job(db, job.id, provider)
+        background_tasks.add_task(_process_job_in_background, job.id, provider)
     return RedirectResponse("/jobs", status_code=303)
 
 
 @app.post("/links/parse")
 def parse_links_form(
+    background_tasks: BackgroundTasks,
     urls: str = Form(...),
     provider: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -90,13 +95,20 @@ def parse_links_form(
         raise HTTPException(status_code=400, detail="No URLs found")
     for url in parsed_urls:
         job = _create_job(db, InputItem(raw_input=url, source_type="url"), provider)
-        _process_job(db, job.id, provider)
+        background_tasks.add_task(_process_job_in_background, job.id, provider)
     return RedirectResponse("/jobs", status_code=303)
 
 
 @app.get("/jobs")
 def jobs(request: Request, db: Session = Depends(get_db)):
-    return templates.TemplateResponse(request, "jobs.html", {"jobs": _recent_jobs(db, limit=100)})
+    return templates.TemplateResponse(
+        request,
+        "jobs.html",
+        {
+            "jobs": _recent_jobs(db, limit=100),
+            "has_active_jobs": _has_active_jobs(db),
+        },
+    )
 
 
 @app.get("/review/{job_id}")
@@ -146,11 +158,10 @@ def bookmarks(
     query: str = "",
     tag: str = "",
     directory: str = "",
+    sort: str = "updated",
     db: Session = Depends(get_db),
 ):
-    stmt = select(Bookmark).options(selectinload(Bookmark.tags), selectinload(Bookmark.directory)).order_by(
-        Bookmark.updated_at.desc()
-    )
+    stmt = select(Bookmark).options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
     if query:
         like = f"%{query}%"
         stmt = stmt.where(
@@ -166,6 +177,7 @@ def bookmarks(
         stmt = stmt.join(Bookmark.directory).where(Directory.path.like(f"{normalize_directory_path(directory)}%"))
     if tag:
         stmt = stmt.join(Bookmark.tags).where(Tag.name == tag)
+    stmt = _apply_bookmark_sort(stmt, sort)
     items = db.scalars(stmt).unique().all()
     return templates.TemplateResponse(
         request,
@@ -178,8 +190,22 @@ def bookmarks(
             "query": query,
             "tag_filter": tag,
             "directory_filter": directory,
+            "sort": sort,
         },
     )
+
+
+@app.get("/bookmarks/{bookmark_id}/open")
+def open_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    if bookmark.source_type != "url" or not bookmark.url:
+        return RedirectResponse("/bookmarks", status_code=303)
+    bookmark.opened_count = (bookmark.opened_count or 0) + 1
+    bookmark.last_opened_at = datetime.utcnow()
+    db.commit()
+    return RedirectResponse(bookmark.url, status_code=302)
 
 
 @app.get("/directories")
@@ -225,17 +251,45 @@ def move_directory_route(directory_id: int, parent_id: int | None = Form(None), 
 
 
 @app.get("/settings")
-def settings_page(request: Request):
+def settings_page(request: Request, saved: str = "", db: Session = Depends(get_db)):
+    runtime_settings = get_effective_settings(db, settings)
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
             "request": request,
-            "settings": settings,
-            "has_openai_key": bool(settings.openai_api_key),
-            "has_deepseek_key": bool(settings.deepseek_api_key),
+            "settings": runtime_settings,
+            "has_openai_key": bool(runtime_settings.openai_api_key),
+            "has_deepseek_key": bool(runtime_settings.deepseek_api_key),
+            "openai_key_label": mask_secret(runtime_settings.openai_api_key),
+            "deepseek_key_label": mask_secret(runtime_settings.deepseek_api_key),
+            "saved": saved == "1",
         },
     )
+
+
+@app.post("/settings")
+def update_settings(
+    llm_provider: str = Form(...),
+    openai_model: str = Form("gpt-5-mini"),
+    deepseek_model: str = Form("deepseek-v4-flash"),
+    openai_api_key: str = Form(""),
+    deepseek_api_key: str = Form(""),
+    clear_openai_key: str | None = Form(None),
+    clear_deepseek_key: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    save_frontend_settings(
+        db,
+        llm_provider=llm_provider,
+        openai_model=openai_model,
+        deepseek_model=deepseek_model,
+        openai_api_key=openai_api_key,
+        deepseek_api_key=deepseek_api_key,
+        clear_openai_key=clear_openai_key == "on",
+        clear_deepseek_key=clear_deepseek_key == "on",
+    )
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 @app.post("/api/items/parse")
@@ -245,7 +299,15 @@ def parse_items_api(payload: ParseItemsRequest, db: Session = Depends(get_db)):
         job = _create_job(db, item, payload.provider)
         _process_job(db, job.id, payload.provider)
         db.refresh(job)
-        jobs.append({"id": job.id, "status": job.status, "source_type": job.source_type})
+        jobs.append(
+            {
+                "id": job.id,
+                "status": job.status,
+                "source_type": job.source_type,
+                "stage": job.stage,
+                "progress_percent": job.progress_percent,
+            }
+        )
     return {"jobs": jobs}
 
 
@@ -256,7 +318,16 @@ def parse_links_api(payload: ParseLinksRequest, db: Session = Depends(get_db)):
         job = _create_job(db, InputItem(raw_input=url, source_type="url"), payload.provider)
         _process_job(db, job.id, payload.provider)
         db.refresh(job)
-        jobs.append({"id": job.id, "status": job.status, "url": job.input_url, "source_type": job.source_type})
+        jobs.append(
+            {
+                "id": job.id,
+                "status": job.status,
+                "url": job.input_url,
+                "source_type": job.source_type,
+                "stage": job.stage,
+                "progress_percent": job.progress_percent,
+            }
+        )
     return {"jobs": jobs}
 
 
@@ -271,12 +342,15 @@ def get_job_api(job_id: int, db: Session = Depends(get_db)):
         "source_type": job.source_type,
         "raw_input": job.raw_input,
         "status": job.status,
+        "stage": job.stage,
+        "progress_percent": job.progress_percent,
         "error": job.error,
         "extracted": job.extracted_json,
         "suggestion": job.suggestion_json,
         "provider": job.provider,
         "model": job.model,
         "created_at": job.created_at.isoformat(),
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }
 
 
@@ -295,10 +369,14 @@ def confirm_bookmark_api(payload: ConfirmBookmarkRequest, db: Session = Depends(
 
 
 @app.get("/api/bookmarks")
-def bookmarks_api(query: str = "", tag: str = "", directory: str = "", db: Session = Depends(get_db)):
-    stmt = select(Bookmark).options(selectinload(Bookmark.tags), selectinload(Bookmark.directory)).order_by(
-        Bookmark.updated_at.desc()
-    )
+def bookmarks_api(
+    query: str = "",
+    tag: str = "",
+    directory: str = "",
+    sort: str = "updated",
+    db: Session = Depends(get_db),
+):
+    stmt = select(Bookmark).options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
     if query:
         like = f"%{query}%"
         stmt = stmt.where(
@@ -314,6 +392,7 @@ def bookmarks_api(query: str = "", tag: str = "", directory: str = "", db: Sessi
         stmt = stmt.join(Bookmark.directory).where(Directory.path.like(f"{normalize_directory_path(directory)}%"))
     if tag:
         stmt = stmt.join(Bookmark.tags).where(Tag.name == tag)
+    stmt = _apply_bookmark_sort(stmt, sort)
     return {
         "bookmarks": [
             {
@@ -325,6 +404,8 @@ def bookmarks_api(query: str = "", tag: str = "", directory: str = "", db: Sessi
                 "name": item.title,
                 "summary": item.summary,
                 "keywords": item.keywords or [],
+                "opened_count": item.opened_count or 0,
+                "last_opened_at": item.last_opened_at.isoformat() if item.last_opened_at else None,
                 "content_type": item.content_type,
                 "directory": item.directory.path if item.directory else None,
                 "tags": [tag.name for tag in item.tags],
@@ -334,13 +415,31 @@ def bookmarks_api(query: str = "", tag: str = "", directory: str = "", db: Sessi
     }
 
 
+@app.post("/api/bookmarks/{bookmark_id}/open")
+def open_bookmark_api(bookmark_id: int, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    bookmark.opened_count = (bookmark.opened_count or 0) + 1
+    bookmark.last_opened_at = datetime.utcnow()
+    db.commit()
+    return {
+        "id": bookmark.id,
+        "opened_count": bookmark.opened_count,
+        "last_opened_at": bookmark.last_opened_at.isoformat() if bookmark.last_opened_at else None,
+    }
+
+
 def _create_job(db: Session, item: InputItem, provider: str | None) -> ParseJob:
+    runtime_settings = get_effective_settings(db, settings)
     job = ParseJob(
         input_url=item.raw_input,
         raw_input=item.raw_input,
         source_type=item.source_type,
         status="pending",
-        provider=provider or settings.llm_provider,
+        stage="等待处理",
+        progress_percent=0,
+        provider=provider or runtime_settings.llm_provider,
     )
     db.add(job)
     db.commit()
@@ -348,15 +447,28 @@ def _create_job(db: Session, item: InputItem, provider: str | None) -> ParseJob:
     return job
 
 
+def _process_job_in_background(job_id: int, provider: str | None) -> None:
+    db = SessionLocal()
+    try:
+        _process_job(db, job_id, provider)
+    finally:
+        db.close()
+
+
 def _process_job(db: Session, job_id: int, provider: str | None) -> None:
     job = db.get(ParseJob, job_id)
     if job is None:
         return
-    job.status = "processing"
-    db.commit()
+    _set_job_progress(db, job, "processing", "准备处理", 5)
     try:
+        if job.source_type == "url":
+            _set_job_progress(db, job, "processing", "抓取链接内容", 20)
+        else:
+            _set_job_progress(db, job, "processing", "整理文本内容", 20)
         extracted = _extract_job_input(job)
-        suggestion_result = generate_suggestion(extracted, list_directory_paths(db), provider, settings)
+        _set_job_progress(db, job, "processing", "生成名称、标签和目录建议", 65)
+        runtime_settings = get_effective_settings(db, settings)
+        suggestion_result = generate_suggestion(extracted, list_directory_paths(db), provider, runtime_settings)
         suggestion = suggestion_result.suggestion
         if suggestion_result.error:
             suggestion["llm_error"] = suggestion_result.error
@@ -365,10 +477,24 @@ def _process_job(db: Session, job_id: int, provider: str | None) -> None:
         job.provider = suggestion_result.provider
         job.model = suggestion_result.model
         job.status = "completed"
+        job.stage = "等待确认"
+        job.progress_percent = 100
+        job.updated_at = datetime.utcnow()
         job.error = None
     except Exception as exc:
         job.status = "failed"
+        job.stage = "处理失败"
+        job.progress_percent = 100
+        job.updated_at = datetime.utcnow()
         job.error = str(exc)
+    db.commit()
+
+
+def _set_job_progress(db: Session, job: ParseJob, status: str, stage: str, progress_percent: int) -> None:
+    job.status = status
+    job.stage = stage
+    job.progress_percent = max(0, min(100, progress_percent))
+    job.updated_at = datetime.utcnow()
     db.commit()
 
 
@@ -429,6 +555,26 @@ def _confirm_bookmark(
 
 def _recent_jobs(db: Session, limit: int) -> list[ParseJob]:
     return list(db.scalars(select(ParseJob).order_by(ParseJob.created_at.desc()).limit(limit)).all())
+
+
+def _apply_bookmark_sort(stmt, sort: str):
+    if sort == "opened":
+        return stmt.order_by(Bookmark.last_opened_at.desc(), Bookmark.updated_at.desc())
+    if sort == "open_count":
+        return stmt.order_by(Bookmark.opened_count.desc(), Bookmark.updated_at.desc())
+    return stmt.order_by(Bookmark.updated_at.desc())
+
+
+def _has_active_jobs(db: Session) -> bool:
+    return (
+        db.scalar(
+            select(ParseJob.id)
+            .where(ParseJob.status.in_(["pending", "processing"]))
+            .order_by(ParseJob.created_at.desc())
+            .limit(1)
+        )
+        is not None
+    )
 
 
 def _extract_job_input(job: ParseJob) -> dict:
