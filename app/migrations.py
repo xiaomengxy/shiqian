@@ -37,6 +37,9 @@ def _ensure_bookmarks(conn) -> None:
             conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN last_opened_at DATETIME")
         if "deleted_at" not in column_names:
             conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN deleted_at DATETIME")
+        if "parsed_at" not in column_names:
+            conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN parsed_at DATETIME")
+            conn.exec_driver_sql("UPDATE bookmarks SET parsed_at = created_at WHERE parsed_at IS NULL")
         return
 
     conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
@@ -59,6 +62,7 @@ def _ensure_bookmarks(conn) -> None:
             opened_count INTEGER NOT NULL DEFAULT 0,
             last_opened_at DATETIME,
             deleted_at DATETIME,
+            parsed_at DATETIME,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             FOREIGN KEY(directory_id) REFERENCES directories (id)
@@ -70,12 +74,12 @@ def _ensure_bookmarks(conn) -> None:
         INSERT INTO bookmarks_new (
             id, url, canonical_url, content_hash, source_type, raw_input, keywords,
             title, summary, content_type, source_domain, directory_id, status,
-            opened_count, last_opened_at, deleted_at, created_at, updated_at
+            opened_count, last_opened_at, deleted_at, parsed_at, created_at, updated_at
         )
         SELECT
             id, url, canonical_url, NULL, 'url', COALESCE(url, ''), ?,
             title, summary, content_type, source_domain, directory_id, status,
-            0, NULL, NULL, created_at, updated_at
+            0, NULL, NULL, created_at, created_at, updated_at
         FROM bookmarks
         """,
         (json.dumps([]),),
@@ -108,6 +112,20 @@ def _ensure_parse_jobs(conn) -> None:
         conn.exec_driver_sql("UPDATE parse_jobs SET updated_at = COALESCE(created_at, ?)", (now,))
     if "deleted_at" not in columns:
         conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN deleted_at DATETIME")
+    if "parsed_at" not in columns:
+        conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN parsed_at DATETIME")
+        conn.exec_driver_sql(
+            "UPDATE parse_jobs SET parsed_at = COALESCE(updated_at, created_at) WHERE status IN ('completed', 'saved')"
+        )
+    if "group_confidence" not in columns:
+        conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN group_confidence FLOAT")
+        conn.exec_driver_sql("UPDATE parse_jobs SET group_confidence = 1.0 WHERE group_confidence IS NULL")
+    if "group_reason" not in columns:
+        conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN group_reason TEXT")
+        conn.exec_driver_sql("UPDATE parse_jobs SET group_reason = '历史任务' WHERE group_reason IS NULL")
+    if "grouping_source" not in columns:
+        conn.exec_driver_sql("ALTER TABLE parse_jobs ADD COLUMN grouping_source VARCHAR(40)")
+        conn.exec_driver_sql("UPDATE parse_jobs SET grouping_source = 'legacy' WHERE grouping_source IS NULL")
 
 
 def _ensure_app_config(conn) -> None:

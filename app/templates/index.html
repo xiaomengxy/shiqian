@@ -5,9 +5,9 @@
   <div class="capture-panel">
     <div class="section-kicker">Quick Capture</div>
     <h1>把线索先拾起来。</h1>
-    <p>粘贴链接、词、短句或段落，拾签会自动命名、提取关键词、打标签，并推荐一个多级目录。</p>
+    <p>粘贴链接、词、短句或段落，拾签会先智能分组，再自动命名、提取关键词、打标签，并推荐一个多级目录。</p>
     <form method="post" action="/items/parse" class="stack capture-form">
-      <textarea name="input_text" rows="11" placeholder="https://example.com/article&#10;&#10;提示词工程&#10;&#10;这是一段想保存起来的想法或资料。"></textarea>
+      <textarea name="input_text" rows="11" placeholder="资料标题&#10;https://example.com/article&#10;提取码：abcd&#10;&#10;&#10;提示词工程&#10;&#10;&#10;这是一段想保存起来的想法或资料。"></textarea>
       <div class="toolbar">
         <label>
           Provider
@@ -19,6 +19,7 @@
         </label>
         <button type="submit">开始整理</button>
       </div>
+      <p class="form-hint">智能分组会优先用本地规则保留链接和附近说明；多链接混排不确定时，才调用当前 AI provider 判疑。</p>
     </form>
   </div>
 

@@ -15,6 +15,27 @@
           <span>{{ job.stage }}</span>
           <strong>{{ job.progress_percent }}%</strong>
         </div>
+        <div class="meta time-meta">
+          <span>提交解析 {{ job.created_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          {% if job.parsed_at %}
+            <span>解析完成 {{ job.parsed_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          {% elif job.updated_at and job.status in ["failed", "processing"] %}
+            <span>状态更新 {{ job.updated_at.strftime("%Y-%m-%d %H:%M") }}</span>
+          {% endif %}
+        </div>
+        {% if job.group_reason %}
+          <div class="meta group-meta">
+            <span>分组：{{ job.group_reason }}</span>
+            {% if job.group_confidence is not none %}
+              <span>{{ "%.0f"|format(job.group_confidence * 100) }}%</span>
+            {% endif %}
+            {% if job.grouping_source == "ai" %}
+              <span>AI 判疑</span>
+            {% elif job.grouping_source == "rules" %}
+              <span>规则判断</span>
+            {% endif %}
+          </div>
+        {% endif %}
         <div class="progress-track" aria-label="进度 {{ job.progress_percent }}%">
           <div class="progress-fill {{ job.status }}" style="width: {{ job.progress_percent }}%"></div>
         </div>

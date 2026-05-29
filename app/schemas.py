@@ -9,6 +9,7 @@ class ParseLinksRequest(BaseModel):
 class ParseItemsRequest(BaseModel):
     input: str = Field(min_length=1)
     provider: str | None = None
+    grouping_mode: str = "smart"
 
 
 class ConfirmBookmarkRequest(BaseModel):

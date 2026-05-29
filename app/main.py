@@ -27,7 +27,7 @@ from app.services.directories import (
 from app.services.llm import generate_suggestion, normalize_suggestion, rewrite_summary
 from app.services.parser import fetch_and_extract
 from app.services.tags import get_or_create_tags, normalize_tags
-from app.services.items import InputItem, content_fingerprint, normalize_keywords, parse_mixed_input
+from app.services.items import InputItem, content_fingerprint, group_mixed_input, normalize_keywords, parse_mixed_input
 from app.services.settings_store import get_effective_settings, mask_secret, save_frontend_settings
 from app.services.urls import canonicalize_url, extract_urls
 
@@ -75,7 +75,8 @@ def parse_items_form(
     provider: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    items = parse_mixed_input(input_text)
+    runtime_settings = get_effective_settings(db, settings)
+    items = group_mixed_input(input_text, provider, runtime_settings)
     if not items:
         raise HTTPException(status_code=400, detail="No content found")
     for item in items:
@@ -456,7 +457,13 @@ def update_settings(
 @app.post("/api/items/parse")
 def parse_items_api(payload: ParseItemsRequest, db: Session = Depends(get_db)):
     jobs = []
-    for item in parse_mixed_input(payload.input):
+    runtime_settings = get_effective_settings(db, settings)
+    items = (
+        group_mixed_input(payload.input, payload.provider, runtime_settings)
+        if payload.grouping_mode == "smart"
+        else parse_mixed_input(payload.input)
+    )
+    for item in items:
         job = _create_job(db, item, payload.provider)
         _process_job(db, job.id, payload.provider)
         db.refresh(job)
@@ -467,6 +474,9 @@ def parse_items_api(payload: ParseItemsRequest, db: Session = Depends(get_db)):
                 "source_type": job.source_type,
                 "stage": job.stage,
                 "progress_percent": job.progress_percent,
+                "group_confidence": job.group_confidence,
+                "group_reason": job.group_reason,
+                "grouping_source": job.grouping_source,
             }
         )
     return {"jobs": jobs}
@@ -487,6 +497,9 @@ def parse_links_api(payload: ParseLinksRequest, db: Session = Depends(get_db)):
                 "source_type": job.source_type,
                 "stage": job.stage,
                 "progress_percent": job.progress_percent,
+                "group_confidence": job.group_confidence,
+                "group_reason": job.group_reason,
+                "grouping_source": job.grouping_source,
             }
         )
     return {"jobs": jobs}
@@ -507,11 +520,15 @@ def get_job_api(job_id: int, db: Session = Depends(get_db)):
         "stage": job.stage,
         "progress_percent": job.progress_percent,
         "error": job.error,
+        "group_confidence": job.group_confidence,
+        "group_reason": job.group_reason,
+        "grouping_source": job.grouping_source,
         "extracted": job.extracted_json,
         "suggestion": _normalized_job_suggestion(db, job),
         "provider": job.provider,
         "model": job.model,
         "created_at": job.created_at.isoformat(),
+        "parsed_at": job.parsed_at.isoformat() if job.parsed_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }
 
@@ -644,6 +661,9 @@ def bookmarks_api(
                 "keywords": item.keywords or [],
                 "opened_count": item.opened_count or 0,
                 "last_opened_at": item.last_opened_at.isoformat() if item.last_opened_at else None,
+                "parsed_at": item.parsed_at.isoformat() if item.parsed_at else None,
+                "created_at": item.created_at.isoformat(),
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
                 "content_type": item.content_type,
                 "directory": item.directory.path if item.directory else None,
                 "tags": [tag.name for tag in item.tags],
@@ -720,13 +740,16 @@ def open_bookmark_api(bookmark_id: int, db: Session = Depends(get_db)):
 def _create_job(db: Session, item: InputItem, provider: str | None) -> ParseJob:
     runtime_settings = get_effective_settings(db, settings)
     job = ParseJob(
-        input_url=item.raw_input,
+        input_url=item.primary_url or item.raw_input,
         raw_input=item.raw_input,
         source_type=item.source_type,
         status="pending",
         stage="等待处理",
         progress_percent=0,
         provider=provider or runtime_settings.llm_provider,
+        group_confidence=item.group_confidence,
+        group_reason=item.group_reason,
+        grouping_source=item.grouping_source,
     )
     db.add(job)
     db.commit()
@@ -766,7 +789,8 @@ def _process_job(db: Session, job_id: int, provider: str | None) -> None:
         job.status = "completed"
         job.stage = "等待确认"
         job.progress_percent = 100
-        job.updated_at = datetime.utcnow()
+        job.parsed_at = datetime.utcnow()
+        job.updated_at = job.parsed_at
         job.error = None
     except Exception as exc:
         job.status = "failed"
@@ -829,6 +853,7 @@ def _confirm_bookmark(
             content_type=suggestion.get("content_type") or extracted.get("content_type") or "webpage",
             source_domain=extracted.get("source_domain") or "",
             directory=directory,
+            parsed_at=job.parsed_at or job.updated_at or job.created_at,
             status="saved",
         )
         db.add(bookmark)
@@ -840,8 +865,11 @@ def _confirm_bookmark(
         bookmark.raw_input = extracted.get("raw_input") or job.raw_input
         bookmark.keywords = final_keywords
         bookmark.directory = directory
+        bookmark.parsed_at = bookmark.parsed_at or job.parsed_at or job.updated_at or job.created_at
         bookmark.deleted_at = None
     bookmark.tags = get_or_create_tags(db, tags)
+    if job.parsed_at is None:
+        job.parsed_at = job.updated_at or job.created_at
     job.status = "saved"
     job.stage = "已保存到收藏"
     job.progress_percent = 100
@@ -925,6 +953,8 @@ def _reconcile_saved_jobs(db: Session, jobs: list[ParseJob]) -> None:
             continue
         if _matching_bookmark_for_job(db, job) is None:
             continue
+        if job.parsed_at is None:
+            job.parsed_at = job.updated_at or job.created_at
         job.status = "saved"
         job.stage = "已保存到收藏"
         job.progress_percent = 100
@@ -1122,9 +1152,13 @@ def _extract_job_input(job: ParseJob) -> dict:
     source_type = job.source_type or "url"
     raw_input = job.raw_input or job.input_url
     if source_type == "url":
-        extracted = fetch_and_extract(raw_input).as_dict()
+        fetch_url = job.input_url or raw_input
+        extracted = fetch_and_extract(fetch_url).as_dict()
         extracted["source_type"] = "url"
         extracted["raw_input"] = raw_input
+        extracted["group_reason"] = job.group_reason
+        extracted["group_confidence"] = job.group_confidence
+        extracted["grouping_source"] = job.grouping_source
         return extracted
     title = _name_from_text(raw_input)
     return {
@@ -1138,6 +1172,9 @@ def _extract_job_input(job: ParseJob) -> dict:
         "source_domain": "",
         "raw_input": raw_input,
         "fetch_status": "local_text",
+        "group_reason": job.group_reason,
+        "group_confidence": job.group_confidence,
+        "grouping_source": job.grouping_source,
     }
 
 

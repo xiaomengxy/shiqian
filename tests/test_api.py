@@ -90,12 +90,17 @@ def test_confirm_bookmark_api_creates_directory_and_bookmark(monkeypatch):
         saved_job = client.get(f"/api/jobs/{job_id}").json()
         assert saved_job["status"] == "saved"
         assert saved_job["stage"] == "已保存到收藏"
+        assert saved_job["created_at"]
+        assert saved_job["parsed_at"]
 
         bookmarks = client.get("/api/bookmarks").json()["bookmarks"]
         assert bookmarks[0]["directory"] == "Resources/Web"
         assert bookmarks[0]["tags"] == ["resource"]
         assert bookmarks[0]["keywords"] == ["keyword"]
         assert bookmarks[0]["opened_count"] == 0
+        assert bookmarks[0]["parsed_at"]
+        assert bookmarks[0]["created_at"]
+        assert bookmarks[0]["updated_at"]
 
         opened = client.get(f"/bookmarks/{bookmarks[0]['id']}/open", follow_redirects=False)
         assert opened.status_code == 302
@@ -156,8 +161,8 @@ def test_parse_items_api_handles_mixed_input_and_keyword_search(monkeypatch):
             "/api/items/parse",
             json={
                 "input": (
-                    "https://example.com/a\n\n"
-                    "prompt engineering\n\n"
+                    "https://example.com/a\n\n\n"
+                    "prompt engineering\n\n\n"
                     "This longer paragraph should be stored as a text item for later lookup."
                 )
             },
@@ -183,6 +188,132 @@ def test_parse_items_api_handles_mixed_input_and_keyword_search(monkeypatch):
         assert len(found) == 3
         assert any(item["url"] is None and item["source_type"] == "term" for item in found)
         assert any(item["url"] is None and item["source_type"] == "text" for item in found)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_parse_items_api_groups_url_with_nearby_text_and_fetches_primary_url(monkeypatch):
+    captured = {}
+
+    def fake_extract(url):
+        captured["url"] = url
+
+        class Extracted:
+            def as_dict(self):
+                return {
+                    "url": url,
+                    "canonical_url": url,
+                    "title": "Grouped Link",
+                    "description": "Desc",
+                    "content": "Content",
+                    "content_type": "webpage",
+                    "source_type": "url",
+                    "source_domain": "example.com",
+                    "raw_input": url,
+                    "fetch_status": "ok",
+                }
+
+        return Extracted()
+
+    def fake_generate(extracted, directories, provider, settings):
+        captured["raw_input"] = extracted["raw_input"]
+
+        class Result:
+            suggestion = {
+                "name": "Grouped Link",
+                "summary": "Summary",
+                "tags": ["resource"],
+                "keywords": ["grouped"],
+                "content_type": "webpage",
+                "recommended_directory_path": "未分类",
+                "directory_reason": "test",
+                "confidence": 0.4,
+            }
+            provider = "rules"
+            model = "local"
+            error = None
+
+        return Result()
+
+    monkeypatch.setattr("app.main.fetch_and_extract", fake_extract)
+    monkeypatch.setattr("app.main.generate_suggestion", fake_generate)
+
+    try:
+        client = _client_with_db()
+        parsed = client.post(
+            "/api/items/parse",
+            json={"input": "资料标题\nhttps://example.com/file\n提取码：abcd"},
+        )
+
+        assert parsed.status_code == 200
+        jobs = parsed.json()["jobs"]
+        assert len(jobs) == 1
+        assert jobs[0]["source_type"] == "url"
+        assert jobs[0]["group_confidence"] >= 0.95
+        assert "提取码" in jobs[0]["group_reason"]
+        assert captured["url"] == "https://example.com/file"
+        assert "资料标题" in captured["raw_input"]
+        assert "提取码" in captured["raw_input"]
+
+        detail = client.get(f"/api/jobs/{jobs[0]['id']}").json()
+        assert detail["input_url"] == "https://example.com/file"
+        assert detail["raw_input"].startswith("资料标题")
+        assert detail["extracted"]["raw_input"] == detail["raw_input"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_links_parse_api_keeps_url_batch_pure(monkeypatch):
+    def fake_extract(url):
+        class Extracted:
+            def as_dict(self):
+                return {
+                    "url": url,
+                    "canonical_url": url,
+                    "title": "Link",
+                    "description": "Desc",
+                    "content": "Content",
+                    "content_type": "webpage",
+                    "source_type": "url",
+                    "source_domain": "example.com",
+                    "raw_input": url,
+                    "fetch_status": "ok",
+                }
+
+        return Extracted()
+
+    def fake_generate(extracted, directories, provider, settings):
+        class Result:
+            suggestion = {
+                "name": "Link",
+                "summary": "Summary",
+                "tags": ["resource"],
+                "keywords": ["link"],
+                "content_type": "webpage",
+                "recommended_directory_path": "未分类",
+                "directory_reason": "test",
+                "confidence": 0.4,
+            }
+            provider = "rules"
+            model = "local"
+            error = None
+
+        return Result()
+
+    monkeypatch.setattr("app.main.fetch_and_extract", fake_extract)
+    monkeypatch.setattr("app.main.generate_suggestion", fake_generate)
+
+    try:
+        client = _client_with_db()
+        parsed = client.post(
+            "/api/links/parse",
+            json={"urls": ["https://example.com/a", "https://example.com/b"]},
+        )
+
+        assert parsed.status_code == 200
+        jobs = parsed.json()["jobs"]
+        assert [job["url"] for job in jobs] == ["https://example.com/a", "https://example.com/b"]
+        assert all(job["grouping_source"] == "rules" for job in jobs)
     finally:
         app.dependency_overrides.clear()
 
@@ -384,7 +515,7 @@ def test_job_soft_delete_restore_and_cleanup(monkeypatch):
 
     try:
         client = _client_with_db()
-        parsed = client.post("/api/items/parse", json={"input": "job term\n\nsecond job"})
+        parsed = client.post("/api/items/parse", json={"input": "job term\n\n\nsecond job"})
         jobs = parsed.json()["jobs"]
         first_id = jobs[0]["id"]
 
@@ -446,7 +577,7 @@ def test_bookmark_partials_filter_directory_and_tag(monkeypatch):
 
     try:
         client = _client_with_db()
-        parsed = client.post("/api/items/parse", json={"input": "ai note\n\ndatabase note"})
+        parsed = client.post("/api/items/parse", json={"input": "ai note\n\n\ndatabase note"})
         for job in parsed.json()["jobs"]:
             detail = client.get(f"/api/jobs/{job['id']}").json()
             client.post(
