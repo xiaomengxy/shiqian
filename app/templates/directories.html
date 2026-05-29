@@ -1,11 +1,15 @@
 {% extends "base.html" %}
 {% block title %}拾签 · 目录{% endblock %}
 {% block content %}
-<section class="panel">
-  <div class="panel-head">
+<section class="page-heading">
+  <div>
+    <div class="section-kicker">Taxonomy</div>
     <h1>目录</h1>
-    <p>目录支持任意层级，用 / 分隔。</p>
+    <p>目录支持任意层级，用 / 分隔；保存收藏时也会自动创建推荐目录。</p>
   </div>
+</section>
+
+<section class="panel">
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="/directories" class="toolbar">
     <input name="path" placeholder="技术/AI/提示词">
@@ -14,7 +18,9 @@
 </section>
 
 <section class="panel">
-  <h2>目录树</h2>
+  <div class="panel-head">
+    <h2>目录树</h2>
+  </div>
   <div class="directory-list">
     {% for directory in directories %}
       <div class="directory-row" style="--depth: {{ directory.depth }}">

@@ -1,14 +1,16 @@
 {% extends "base.html" %}
 {% block title %}拾签 · 确认收藏{% endblock %}
 {% block content %}
-<section class="panel">
-  <div class="panel-head">
-    <div>
-      <h1>确认收藏</h1>
-      <p>{{ job.source_type }}{% if extracted.source_domain %} · {{ extracted.source_domain }}{% endif %} · {{ suggestion.content_type or extracted.content_type }}</p>
-    </div>
-    <a class="button secondary" href="/jobs">返回队列</a>
+<section class="page-heading">
+  <div>
+    <div class="section-kicker">Review</div>
+    <h1>确认收藏</h1>
+    <p>{{ job.source_type }}{% if extracted.source_domain %} · {{ extracted.source_domain }}{% endif %} · {{ suggestion.content_type or extracted.content_type }}</p>
   </div>
+  <a class="button secondary" href="/jobs">返回队列</a>
+</section>
+
+<section class="panel">
   {% if job.status != "completed" %}
     <p class="error">这个任务尚未完成：{{ job.status }} {{ job.error or "" }}</p>
   {% else %}
@@ -22,8 +24,10 @@
         <label>链接<input value="{{ extracted.canonical_url }}" readonly></label>
       {% endif %}
       <label>简介<textarea name="summary" rows="5">{{ suggestion.summary }}</textarea></label>
-      <label>标签<input name="tags" value="{{ suggestion.tags | join(', ') }}"></label>
-      <label>关键词<input name="keywords" value="{{ suggestion.keywords | join(', ') }}"></label>
+      <div class="grid two">
+        <label>标签<input name="tags" value="{{ suggestion.tags | join(', ') }}"></label>
+        <label>关键词<input name="keywords" value="{{ suggestion.keywords | join(', ') }}"></label>
+      </div>
       <label>
         多级目录路径
         <input name="directory_path" list="directory-options" value="{{ suggestion.recommended_directory_path or '未分类' }}">
@@ -39,7 +43,7 @@
       </details>
       <p class="muted">{{ suggestion.directory_reason }}</p>
       <div class="toolbar">
-        {% if job.source_type == "url" %}<a href="{{ extracted.url }}" target="_blank" rel="noreferrer">打开原链接</a>{% endif %}
+        {% if job.source_type == "url" %}<a class="button secondary" href="{{ extracted.url }}" target="_blank" rel="noreferrer">打开原链接</a>{% endif %}
         <button type="submit">保存收藏</button>
       </div>
     </form>

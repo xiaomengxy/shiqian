@@ -7,11 +7,18 @@
     <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}">
   </head>
   <body>
+    <div class="page-grain" aria-hidden="true"></div>
     <header class="topbar">
-      <a class="brand" href="/">拾签</a>
+      <a class="brand" href="/">
+        <span class="brand-mark">拾</span>
+        <span>
+          <strong>拾签</strong>
+          <small>Capture Library</small>
+        </span>
+      </a>
       <nav>
         <a href="/">添加</a>
-        <a href="/jobs">解析队列</a>
+        <a href="/jobs">队列</a>
         <a href="/bookmarks">收藏</a>
         <a href="/directories">目录</a>
         <a href="/settings">设置</a>

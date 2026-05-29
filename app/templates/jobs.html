@@ -4,14 +4,16 @@
 {% if has_active_jobs %}
   <meta http-equiv="refresh" content="3">
 {% endif %}
-<section class="panel">
-  <div class="panel-head">
-    <div>
-      <h1>解析队列</h1>
-      <p>任务会在后台处理；有任务运行时，本页会自动刷新。</p>
-    </div>
-    <a class="button secondary" href="/">继续添加</a>
+<section class="page-heading">
+  <div>
+    <div class="section-kicker">Queue</div>
+    <h1>解析队列</h1>
+    <p>任务会在后台处理；有任务运行时，本页会自动刷新。</p>
   </div>
+  <a class="button secondary" href="/">继续添加</a>
+</section>
+
+<section class="panel">
   <div class="table-wrap">
     <table>
       <thead>

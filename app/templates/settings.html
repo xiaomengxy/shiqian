@@ -1,13 +1,15 @@
 {% extends "base.html" %}
 {% block title %}拾签 · 设置{% endblock %}
 {% block content %}
-<section class="panel">
-  <div class="panel-head">
-    <div>
-      <h1>设置</h1>
-      <p>在这里直接配置 OpenAI 或 DeepSeek。保存后下一次整理内容会立即使用新配置。</p>
-    </div>
+<section class="page-heading">
+  <div>
+    <div class="section-kicker">Settings</div>
+    <h1>设置</h1>
+    <p>直接配置 OpenAI 或 DeepSeek。保存后，下一次整理内容会立即使用新配置。</p>
   </div>
+</section>
+
+<section class="panel">
   {% if saved %}
     <p class="notice">设置已保存。</p>
   {% endif %}
