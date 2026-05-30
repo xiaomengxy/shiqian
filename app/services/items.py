@@ -241,6 +241,8 @@ def _ai_group_input(
         return local_items
     if not items or any(item.group_confidence < AI_ACCEPT_THRESHOLD for item in items):
         return local_items
+    if any(not _raw_input_matches_source(item.raw_input, text) for item in items):
+        return local_items
     return _dedupe_items(items)
 
 
@@ -363,6 +365,12 @@ def _dedupe_items(items: list[InputItem]) -> list[InputItem]:
             seen.add(key)
             unique.append(item)
     return unique
+
+
+def _raw_input_matches_source(raw_input: str, source_text: str) -> bool:
+    normalized_raw = normalize_text_for_hash(raw_input)
+    normalized_source = normalize_text_for_hash(source_text)
+    return bool(normalized_raw and normalized_raw in normalized_source)
 
 
 def _clamp_confidence(value: Any) -> float:

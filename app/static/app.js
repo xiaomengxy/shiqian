@@ -11,6 +11,7 @@
   let draggedBookmarkId = null;
   const directoryViewKey = "shiqian.directoryViewMode";
   const directoryViewModes = new Set(["structure", "items"]);
+  const collapsedDirectoryItemsKey = "shiqian.collapsedDirectoryItems";
 
   function asUrl(value) {
     return new URL(value, window.location.origin);
@@ -48,6 +49,67 @@
     } catch {
       // Browser storage can be unavailable in private or restricted contexts.
     }
+  }
+
+  function storedCollapsedDirectoryItems() {
+    try {
+      const value = JSON.parse(window.localStorage.getItem(collapsedDirectoryItemsKey) || "[]");
+      if (!Array.isArray(value)) return new Set();
+      return new Set(value.map(String));
+    } catch {
+      return new Set();
+    }
+  }
+
+  function setStoredCollapsedDirectoryItems(keys) {
+    try {
+      window.localStorage.setItem(collapsedDirectoryItemsKey, JSON.stringify(Array.from(keys)));
+    } catch {
+      // Browser storage can be unavailable in private or restricted contexts.
+    }
+  }
+
+  function setDirectoryItemsCollapsed(branch, collapsed) {
+    if (!branch) return;
+    const button = branch.querySelector("[data-directory-items-toggle]");
+    const contentLists = Array.from(branch.children).filter((child) =>
+      child.matches?.("[data-directory-items-list], [data-directory-children-list]")
+    );
+    const targetSelector = button?.dataset.directoryItemsTarget;
+    const externalTarget = targetSelector ? document.querySelector(targetSelector) : null;
+    branch.classList.toggle("is-items-collapsed", collapsed);
+    contentLists.forEach((list) => {
+      list.hidden = collapsed;
+    });
+    if (externalTarget) externalTarget.hidden = collapsed;
+    if (button) {
+      button.setAttribute("aria-expanded", String(!collapsed));
+      button.title = collapsed ? "展开内容" : "折叠内容";
+    }
+  }
+
+  function restoreCollapsedDirectoryItems(root = document) {
+    const collapsedKeys = storedCollapsedDirectoryItems();
+    root.querySelectorAll("[data-directory-item-branch]").forEach((branch) => {
+      const key = branch.dataset.directoryItemsKey;
+      if (!key) return;
+      setDirectoryItemsCollapsed(branch, collapsedKeys.has(key));
+    });
+  }
+
+  function toggleDirectoryItems(button) {
+    const branch = button.closest("[data-directory-item-branch]");
+    const key = button.dataset.directoryItemsKey || branch?.dataset.directoryItemsKey;
+    if (!branch || !key) return;
+    const collapsedKeys = storedCollapsedDirectoryItems();
+    const shouldCollapse = !branch.classList.contains("is-items-collapsed");
+    if (shouldCollapse) {
+      collapsedKeys.add(String(key));
+    } else {
+      collapsedKeys.delete(String(key));
+    }
+    setStoredCollapsedDirectoryItems(collapsedKeys);
+    setDirectoryItemsCollapsed(branch, shouldCollapse);
   }
 
   function directoryViewFromUrl(urlLike) {
@@ -91,10 +153,41 @@
     }
   }
 
+  function captureScrollState(target) {
+    const selectors = [".library-sidebar", ".library-results"];
+    return {
+      windowX: window.scrollX,
+      windowY: window.scrollY,
+      elements: selectors.map((selector) => {
+        const element = target.querySelector(selector);
+        return {
+          selector,
+          scrollLeft: element?.scrollLeft || 0,
+          scrollTop: element?.scrollTop || 0,
+        };
+      }),
+    };
+  }
+
+  function restoreScrollState(state) {
+    if (!state) return;
+    window.scrollTo(state.windowX, state.windowY);
+    state.elements.forEach((entry) => {
+      const element = document.querySelector(entry.selector);
+      if (!element) return;
+      element.scrollLeft = entry.scrollLeft;
+      element.scrollTop = entry.scrollTop;
+    });
+    window.requestAnimationFrame(() => {
+      window.scrollTo(state.windowX, state.windowY);
+    });
+  }
+
   async function replaceFragment(targetSelector, partialUrl, nextUrl, options = {}) {
     const target = document.querySelector(targetSelector);
     if (!target || !partialUrl) return;
     const focusState = options.preserveFocus ? captureFocus(target) : null;
+    const scrollState = options.preserveScroll ? captureScrollState(target) : null;
     target.classList.add("is-loading");
     try {
       const response = await fetch(partialUrl, {
@@ -105,7 +198,9 @@
       const html = await response.text();
       target.outerHTML = html;
       setupAutoRefresh();
+      restoreCollapsedDirectoryItems();
       restoreFocus(focusState);
+      restoreScrollState(scrollState);
       if (nextUrl) {
         const historyState = { target: targetSelector };
         const viewMode = directoryViewFromUrl(nextUrl);
@@ -200,14 +295,21 @@
     const partialUrl = partialUrlFrom(href);
     const target = link.dataset.target || targetForUrl(href);
     if (!partialUrl || !target) return false;
-    await replaceFragment(target, partialUrl, href);
+    await replaceFragment(target, partialUrl, href, {
+      preserveScroll: link.dataset.preserveScroll === "true",
+    });
     return true;
   }
 
   function filterUrlFromForm(form) {
     const params = new URLSearchParams();
     new FormData(form).forEach((value, key) => {
-      if (String(value).trim()) params.set(key, value);
+      if (!String(value).trim()) return;
+      if (key === "tag") {
+        params.append(key, value);
+      } else {
+        params.set(key, value);
+      }
     });
     const path = form.getAttribute("action") || window.location.pathname;
     if (path === "/bookmarks" && !params.has("tree_view")) {
@@ -634,6 +736,13 @@
       return;
     }
 
+    const directoryItemsToggle = event.target.closest("[data-directory-items-toggle]");
+    if (directoryItemsToggle) {
+      event.preventDefault();
+      toggleDirectoryItems(directoryItemsToggle);
+      return;
+    }
+
     const link = event.target.closest("[data-partial-link]");
     if (!link) return;
     event.preventDefault();
@@ -679,7 +788,8 @@
 
     const node = event.target.closest("[data-directory-draggable]");
     if (!node) return;
-    if (!isDirectoryManageMode(node)) {
+    const blockedDirectoryDrag = event.target.closest("button, input, select, textarea, summary, form");
+    if (blockedDirectoryDrag) {
       event.preventDefault();
       return;
     }
@@ -690,8 +800,9 @@
   });
 
   document.addEventListener("dragend", (event) => {
-    event.target.closest("[data-directory-draggable]")?.classList.remove("is-dragging");
-    event.target.closest("[data-bookmark-draggable]")?.classList.remove("is-dragging");
+    const target = event.target instanceof Element ? event.target : null;
+    target?.closest("[data-directory-draggable]")?.classList.remove("is-dragging");
+    target?.closest("[data-bookmark-draggable]")?.classList.remove("is-dragging");
     document
       .querySelectorAll(".is-drop-target, .is-bookmark-drop-target")
       .forEach((node) => node.classList.remove("is-drop-target", "is-bookmark-drop-target"));
@@ -827,5 +938,6 @@
   }
 
   setupAutoRefresh();
+  restoreCollapsedDirectoryItems();
   restoreStoredDirectoryView();
 })();

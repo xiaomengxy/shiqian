@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -146,6 +146,113 @@ def grouping_split_blank(session_id: int, db: Session = Depends(get_db)):
     return RedirectResponse(f"/grouping/{session.id}", status_code=303)
 
 
+@app.post("/grouping/{session_id}/regroup")
+def grouping_regroup(session_id: int, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    runtime_settings = get_effective_settings(db, settings)
+    items = _preview_group_input(session.raw_input, session.provider, runtime_settings)
+    if not items:
+        raise HTTPException(status_code=400, detail="No content found")
+    session.groups_json = [_group_payload(item) for item in items]
+    session.status = "draft"
+    session.updated_at = datetime.utcnow()
+    db.commit()
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
+@app.post("/grouping/{session_id}/update")
+async def grouping_update(session_id: int, request: Request, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    form = await request.form()
+    _save_grouping_form(db, session, form, reason="用户编辑分组")
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
+@app.post("/grouping/{session_id}/merge")
+async def grouping_merge(session_id: int, request: Request, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    form = await request.form()
+    groups = _items_from_grouping_form(form, reason="用户编辑分组")
+    index = _safe_form_index(form.get("merge_index"))
+    if index is not None and 0 <= index < len(groups) - 1:
+        combined = "\n\n".join([groups[index].raw_input, groups[index + 1].raw_input]).strip()
+        groups[index : index + 2] = [
+            _input_item_from_group(
+                combined,
+                reason="用户合并相邻分组",
+                confidence=1.0,
+                grouping_source="user",
+            )
+        ]
+    _save_session_groups(db, session, groups)
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
+@app.post("/grouping/{session_id}/split")
+async def grouping_split(session_id: int, request: Request, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    form = await request.form()
+    groups = _items_from_grouping_form(form, reason="用户编辑分组")
+    index = _safe_form_index(form.get("split_index"))
+    if index is not None and 0 <= index < len(groups):
+        split_items = parse_mixed_input(groups[index].raw_input)
+        if len(split_items) > 1:
+            groups[index : index + 1] = [
+                _input_item_from_group(
+                    item.raw_input,
+                    source_type=item.source_type,
+                    reason="用户按内容拆分当前分组",
+                    confidence=1.0,
+                    grouping_source="user",
+                )
+                for item in split_items
+            ]
+    _save_session_groups(db, session, groups)
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
+@app.post("/grouping/{session_id}/delete")
+async def grouping_delete(session_id: int, request: Request, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    form = await request.form()
+    groups = _items_from_grouping_form(form, reason="用户编辑分组")
+    index = _safe_form_index(form.get("delete_index"))
+    if index is not None and 0 <= index < len(groups):
+        groups.pop(index)
+    _save_session_groups(db, session, groups)
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
+@app.post("/grouping/{session_id}/add")
+async def grouping_add(session_id: int, request: Request, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    form = await request.form()
+    groups = _items_from_grouping_form(form, reason="用户编辑分组")
+    groups.append(
+        InputItem(
+            raw_input="",
+            source_type="text",
+            group_confidence=1.0,
+            group_reason="用户新增空分组",
+            grouping_source="user",
+        )
+    )
+    _save_session_groups(db, session, groups)
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
 @app.post("/grouping/{session_id}/confirm")
 async def grouping_confirm(
     session_id: int,
@@ -223,7 +330,9 @@ def jobs_partial(request: Request, show_saved: bool = False, db: Session = Depen
 def cleanup_jobs(db: Session = Depends(get_db)):
     now = datetime.utcnow()
     jobs = db.scalars(
-        select(ParseJob).where(ParseJob.deleted_at.is_(None), ParseJob.status.in_(["completed", "failed", "saved"]))
+        select(ParseJob).where(
+            ParseJob.deleted_at.is_(None), ParseJob.status.in_(["completed", "failed", "saved", "duplicate"])
+        )
     ).all()
     for job in jobs:
         job.deleted_at = now
@@ -321,7 +430,7 @@ def confirm_bookmark_form(
 def bookmarks(
     request: Request,
     query: str = "",
-    tag: str = "",
+    tag: list[str] = Query(default_factory=list),
     directory: str = "",
     sort: str = "updated",
     tree_view: str = "structure",
@@ -339,7 +448,7 @@ def bookmarks(
 def bookmarks_partial(
     request: Request,
     query: str = "",
-    tag: str = "",
+    tag: list[str] = Query(default_factory=list),
     directory: str = "",
     sort: str = "updated",
     tree_view: str = "structure",
@@ -589,6 +698,7 @@ def get_job_api(job_id: int, db: Session = Depends(get_db)):
     if job is None or job.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Job not found")
     _reconcile_saved_jobs(db, [job])
+    matching_bookmark = _matching_bookmark_for_job(db, job) if job.status in {"saved", "duplicate"} else None
     return {
         "id": job.id,
         "input_url": job.input_url,
@@ -611,6 +721,7 @@ def get_job_api(job_id: int, db: Session = Depends(get_db)):
         "created_at_display": local_datetime(job.created_at),
         "parsed_at_display": local_datetime(job.parsed_at),
         "updated_at_display": local_datetime(job.updated_at),
+        "matching_bookmark": _bookmark_reference_payload(matching_bookmark) if matching_bookmark else None,
     }
 
 
@@ -802,11 +913,12 @@ def confirm_bookmark_api(payload: ConfirmBookmarkRequest, db: Session = Depends(
 @app.get("/api/bookmarks")
 def bookmarks_api(
     query: str = "",
-    tag: str = "",
+    tag: list[str] = Query(default_factory=list),
     directory: str = "",
     sort: str = "updated",
     db: Session = Depends(get_db),
 ):
+    tag_filters = _clean_tag_filters(tag)
     stmt = (
         select(Bookmark)
         .options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
@@ -833,8 +945,8 @@ def bookmarks_api(
         )
     elif directory:
         stmt = stmt.join(Bookmark.directory).where(Directory.path.like(f"{normalize_directory_path(directory)}%"))
-    if tag:
-        stmt = stmt.join(Bookmark.tags).where(Tag.name == tag)
+    if tag_filters:
+        stmt = stmt.join(Bookmark.tags).where(Tag.name.in_(tag_filters))
     stmt = _apply_bookmark_sort(stmt, sort)
     return {
         "bookmarks": [
@@ -986,6 +1098,42 @@ def _group_payload(item: InputItem) -> dict:
     }
 
 
+def _items_from_grouping_form(form, *, reason: str) -> list[InputItem]:
+    raw_inputs = [str(value).strip() for value in form.getlist("raw_input")]
+    source_types = [str(value).strip() for value in form.getlist("source_type")]
+    items: list[InputItem] = []
+    for index, raw_input in enumerate(raw_inputs):
+        source_type = source_types[index] if index < len(source_types) else ""
+        items.append(
+            _input_item_from_group(
+                raw_input,
+                source_type=source_type,
+                reason=reason,
+                confidence=1.0,
+                grouping_source="user",
+            )
+        )
+    return items
+
+
+def _save_grouping_form(db: Session, session: ParseSession, form, *, reason: str) -> None:
+    _save_session_groups(db, session, _items_from_grouping_form(form, reason=reason))
+
+
+def _save_session_groups(db: Session, session: ParseSession, items: list[InputItem]) -> None:
+    session.groups_json = [_group_payload(item) for item in items]
+    session.status = "draft"
+    session.updated_at = datetime.utcnow()
+    db.commit()
+
+
+def _safe_form_index(value) -> int | None:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def _input_item_from_group(
     raw_input: str,
     *,
@@ -1054,13 +1202,24 @@ def _process_job(db: Session, job_id: int, provider: str | None) -> None:
         else:
             _set_job_progress(db, job, "processing", "整理文本内容", 20)
         extracted = _extract_job_input(job)
+        job.extracted_json = extracted
+        duplicate = _matching_bookmark_for_job(db, job)
+        if duplicate is not None:
+            now = datetime.utcnow()
+            job.status = "duplicate"
+            job.stage = "已存在收藏"
+            job.progress_percent = 100
+            job.parsed_at = now
+            job.updated_at = now
+            job.error = None
+            db.commit()
+            return
         _set_job_progress(db, job, "processing", "生成名称、标签和目录建议", 65)
         runtime_settings = get_effective_settings(db, settings)
         suggestion_result = generate_suggestion(extracted, list_directory_paths(db), provider, runtime_settings)
         suggestion = suggestion_result.suggestion
         if suggestion_result.error:
             suggestion["llm_error"] = suggestion_result.error
-        job.extracted_json = extracted
         job.suggestion_json = suggestion
         job.provider = suggestion_result.provider
         job.model = suggestion_result.model
@@ -1346,6 +1505,7 @@ def _recent_jobs(db: Session, limit: int, show_saved: bool = False) -> list[Pars
 
 def _jobs_context(db: Session, show_saved: bool = False) -> dict:
     jobs = _recent_jobs(db, limit=100, show_saved=show_saved)
+    _attach_matching_bookmarks(db, jobs)
     saved_count = db.scalar(
         select(func.count(ParseJob.id)).where(ParseJob.deleted_at.is_(None), ParseJob.status == "saved")
     ) or 0
@@ -1373,6 +1533,22 @@ def _prepare_job_retry(db: Session, job_id: int) -> ParseJob:
     db.commit()
     db.refresh(job)
     return job
+
+
+def _attach_matching_bookmarks(db: Session, jobs: list[ParseJob]) -> None:
+    for job in jobs:
+        if job.status not in {"saved", "duplicate"}:
+            continue
+        setattr(job, "matching_bookmark", _matching_bookmark_for_job(db, job))
+
+
+def _bookmark_reference_payload(bookmark: Bookmark) -> dict:
+    return {
+        "id": bookmark.id,
+        "title": bookmark.title,
+        "directory": bookmark.directory.path if bookmark.directory else None,
+        "url": bookmark.url if bookmark.source_type == "url" else None,
+    }
 
 
 def _reconcile_saved_jobs(db: Session, jobs: list[ParseJob]) -> None:
@@ -1411,8 +1587,11 @@ def _matching_bookmark_for_job(db: Session, job: ParseJob) -> Bookmark | None:
     return db.scalar(select(Bookmark).where(Bookmark.deleted_at.is_(None), Bookmark.content_hash == content_hash))
 
 
-def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str, sort: str, tree_view: str) -> dict:
+def _bookmark_browser_context(
+    db: Session, query: str, tag: list[str] | str, directory: str, sort: str, tree_view: str
+) -> dict:
     tree_view = tree_view if tree_view in {"structure", "items"} else "structure"
+    tag_filters = _clean_tag_filters(tag)
     directory_items = db.scalars(
         select(Directory)
         .where(Directory.path != UNCATEGORIZED_PATH, ~Directory.path.like(f"{UNCATEGORIZED_PATH}/%"))
@@ -1420,11 +1599,12 @@ def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str,
     ).all()
     direct_counts = _directory_bookmark_counts(db)
     directory_tree = _build_directory_tree(directory_items, direct_counts)
-    items = _query_bookmarks(db, query=query, tag=tag, directory=directory, sort=sort)
+    items = _query_bookmarks(db, query=query, tags=tag_filters, directory=directory, sort=sort)
     directory_bookmarks_by_id: dict[int, list[Bookmark]] = {}
     uncategorized_bookmarks: list[Bookmark] = []
     if tree_view == "items":
         directory_bookmarks_by_id, uncategorized_bookmarks = _directory_tree_bookmarks(db)
+    tag_options = _tag_filter_options(db, query=query, directory=directory, sort=sort, selected_tags=tag_filters)
     all_count = db.scalar(select(func.count(Bookmark.id)).where(Bookmark.deleted_at.is_(None))) or 0
     uncategorized_count = (
         db.scalar(
@@ -1449,8 +1629,8 @@ def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str,
         view_title = UNCATEGORIZED_PATH
     elif current_directory:
         view_title = current_directory.path
-    if tag:
-        view_title = f"{view_title} · #{tag}"
+    if tag_filters:
+        view_title = f"{view_title} · " + " + ".join(f"#{tag}" for tag in tag_filters)
     if query:
         view_title = f"{view_title} · 搜索“{query}”"
     return {
@@ -1463,8 +1643,11 @@ def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str,
         "directory_bookmarks_by_id": directory_bookmarks_by_id,
         "uncategorized_bookmarks": uncategorized_bookmarks,
         "tags": db.scalars(select(Tag).order_by(Tag.name)).all(),
+        "tag_options": tag_options[:12],
+        "tag_overflow": tag_options[12:],
         "query": query,
-        "tag_filter": tag,
+        "tag_filter": tag_filters[0] if tag_filters else "",
+        "tag_filters": tag_filters,
         "directory_filter": directory,
         "current_directory": current_directory,
         "directory_count": len(directory_items),
@@ -1474,7 +1657,7 @@ def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str,
     }
 
 
-def _query_bookmarks(db: Session, *, query: str, tag: str, directory: str, sort: str) -> list[Bookmark]:
+def _query_bookmarks(db: Session, *, query: str, tags: list[str], directory: str, sort: str) -> list[Bookmark]:
     stmt = (
         select(Bookmark)
         .options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
@@ -1501,10 +1684,46 @@ def _query_bookmarks(db: Session, *, query: str, tag: str, directory: str, sort:
         )
     elif directory:
         stmt = stmt.join(Bookmark.directory).where(Directory.path.like(f"{normalize_directory_path(directory)}%"))
-    if tag:
-        stmt = stmt.join(Bookmark.tags).where(Tag.name == tag)
+    if tags:
+        stmt = stmt.join(Bookmark.tags).where(Tag.name.in_(tags))
     stmt = _apply_bookmark_sort(stmt, sort)
     return db.scalars(stmt).unique().all()
+
+
+def _tag_filter_options(
+    db: Session, *, query: str, directory: str, sort: str, selected_tags: list[str]
+) -> list[dict[str, int | str | bool]]:
+    base_items = _query_bookmarks(db, query=query, tags=[], directory=directory, sort=sort)
+    counts: dict[str, int] = {}
+    for bookmark in base_items:
+        for tag in bookmark.tags:
+            counts[tag.name] = counts.get(tag.name, 0) + 1
+    names = {name for name, count in counts.items() if count > 0}
+    selected_set = set(selected_tags)
+    names.update(selected_set)
+    options = [
+        {
+            "name": name,
+            "count": counts.get(name, 0),
+            "active": name in selected_set,
+            "next_tags": [tag for tag in selected_tags if tag != name] if name in selected_set else [*selected_tags, name],
+        }
+        for name in names
+    ]
+    return sorted(options, key=lambda item: (not item["active"], -int(item["count"]), str(item["name"])))
+
+
+def _clean_tag_filters(tags: list[str] | str) -> list[str]:
+    raw_tags = [tags] if isinstance(tags, str) else tags
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for tag in raw_tags:
+        clean = " ".join(str(tag).split())[:40]
+        key = clean.casefold()
+        if clean and key not in seen:
+            seen.add(key)
+            cleaned.append(clean)
+    return cleaned
 
 
 def _apply_bookmark_sort(stmt, sort: str):

@@ -9,6 +9,7 @@ from app.database import get_db
 from app.main import app
 from app.migrations import ensure_runtime_schema
 from app.models import Base, Bookmark, Directory, Tag
+from app.services.items import content_fingerprint
 
 
 def _client_with_db():
@@ -981,12 +982,28 @@ def test_bookmarks_sidebar_renders_directory_management_controls():
         app.dependency_overrides.clear()
 
 
+def test_top_navigation_is_compact_and_marks_current_page():
+    try:
+        client = _client_with_db()
+        page = client.get("/bookmarks")
+        assert page.status_code == 200
+        assert 'class="top-nav"' in page.text
+        assert 'class="nav-link active" href="/bookmarks" aria-current="page">收藏</a>' in page.text
+        assert 'class="nav-link nav-add ' in page.text
+        assert ">+ 添加</a>" in page.text
+        assert "Capture Library" in page.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_bookmark_sidebar_tree_view_can_show_direct_items():
     try:
         client = _client_with_db()
         with client.TestingSession() as session:
             root = Directory(name="资料", path="资料", depth=0)
             child = Directory(name="AI", path="资料/AI", depth=1, parent=root)
+            parent_only = Directory(name="空父", path="空父", depth=0)
+            child_only = Directory(name="子目录", path="空父/子目录", depth=1, parent=parent_only)
             tag = Tag(name="主题", slug="topic")
             root_item = Bookmark(
                 source_type="text",
@@ -1033,18 +1050,30 @@ def test_bookmark_sidebar_tree_view_can_show_direct_items():
                 directory=root,
                 deleted_at=datetime.utcnow(),
             )
-            session.add_all([root, child, tag, root_item, child_item, uncategorized, deleted])
+            session.add_all([root, child, parent_only, child_only, tag, root_item, child_item, uncategorized, deleted])
             session.commit()
+            root_id = root.id
+            parent_only_id = parent_only.id
             root_item_id = root_item.id
 
         structure = client.get("/bookmarks/partials?tree_view=structure")
         assert structure.status_code == 200
         assert 'data-directory-view="items"' in structure.text
         assert "directory-item-row" not in structure.text
+        assert "data-directory-items-toggle" not in structure.text
 
         items = client.get("/bookmarks/partials?tree_view=items")
         assert items.status_code == 200
         assert 'data-directory-view="structure"' in items.text
+        assert 'data-directory-items-toggle' in items.text
+        assert 'data-directory-items-list' in items.text
+        assert 'data-directory-items-key="all-directories"' in items.text
+        assert 'data-directory-items-target="#directory-tree-section"' in items.text
+        assert 'id="directory-tree-section"' in items.text
+        assert 'data-directory-items-key="uncategorized"' in items.text
+        assert f'data-directory-items-key="dir-{root_id}"' in items.text
+        assert f'data-directory-items-key="dir-{parent_only_id}"' in items.text
+        assert "展开或折叠 空父 下的内容" in items.text
         assert "directory-item-row" in items.text
         assert "data-bookmark-drag-handle" in items.text
         assert f'data-bookmark-id="{root_item_id}"' in items.text
@@ -1057,6 +1086,94 @@ def test_bookmark_sidebar_tree_view_can_show_direct_items():
         filtered = client.get("/bookmarks/partials?tree_view=items&directory=资料")
         assert filtered.status_code == 200
         assert 'name="tree_view" value="items"' in filtered.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bookmark_tag_filter_panel_counts_active_items():
+    try:
+        client = _client_with_db()
+        with client.TestingSession() as session:
+            directory = Directory(name="资料", path="资料", depth=0)
+            ai = Tag(name="AI", slug="ai")
+            database = Tag(name="数据库", slug="database")
+            hidden = Tag(name="隐藏", slug="hidden")
+            first = Bookmark(
+                source_type="text",
+                raw_input="ai one",
+                content_hash="tag-filter-ai-one",
+                keywords=[],
+                title="AI 条目一",
+                summary="AI summary",
+                content_type="text",
+                source_domain="",
+                directory=directory,
+                tags=[ai],
+            )
+            second = Bookmark(
+                source_type="text",
+                raw_input="ai two",
+                content_hash="tag-filter-ai-two",
+                keywords=[],
+                title="AI 条目二",
+                summary="AI summary",
+                content_type="text",
+                source_domain="",
+                directory=directory,
+                tags=[ai, database],
+            )
+            third = Bookmark(
+                source_type="text",
+                raw_input="database only",
+                content_hash="tag-filter-database-only",
+                keywords=[],
+                title="数据库条目",
+                summary="Database summary",
+                content_type="text",
+                source_domain="",
+                directory=directory,
+                tags=[database],
+            )
+            deleted = Bookmark(
+                source_type="text",
+                raw_input="deleted",
+                content_hash="tag-filter-deleted",
+                keywords=[],
+                title="删除条目",
+                summary="Deleted",
+                content_type="text",
+                source_domain="",
+                directory=directory,
+                tags=[hidden],
+                deleted_at=datetime.utcnow(),
+            )
+            session.add_all([directory, ai, database, hidden, first, second, third, deleted])
+            session.commit()
+
+        page = client.get("/bookmarks/partials?tree_view=items&directory=资料&tag=AI&tag=数据库")
+        assert page.status_code == 200
+        assert 'class="tag-filter-panel"' in page.text
+        assert '<select name="tag"' not in page.text
+        assert 'name="tag" value="AI"' in page.text
+        assert 'name="tag" value="数据库"' in page.text
+        assert "清除 2 个标签" in page.text
+        assert "#AI ×" in page.text
+        assert "#数据库 ×" in page.text
+        assert "<small>2</small>" in page.text
+        assert "当前显示 3 条收藏" in page.text
+        assert "AI 条目一" in page.text
+        assert "AI 条目二" in page.text
+        assert "数据库条目" in page.text
+        assert "#隐藏" not in page.text
+        assert 'name="tree_view" value="items"' in page.text
+
+        unfiltered_page = client.get("/bookmarks/partials?tree_view=items&directory=资料")
+        assert unfiltered_page.status_code == 200
+        assert "&tag=AI" in unfiltered_page.text
+        assert "&tag=%E6%95%B0%E6%8D%AE%E5%BA%93" in unfiltered_page.text
+
+        api_result = client.get("/api/bookmarks?directory=资料&tag=AI&tag=数据库").json()["bookmarks"]
+        assert {item["title"] for item in api_result} == {"AI 条目一", "AI 条目二", "数据库条目"}
     finally:
         app.dependency_overrides.clear()
 
@@ -1090,7 +1207,7 @@ def test_items_form_opens_grouping_preview_before_jobs():
         assert "Grouping Preview" in page.text
         assert page.text.count('name="raw_input"') == 1
         assert "全部作为一条" in page.text
-        assert "确认分组" in page.text
+        assert "确认并解析" in page.text
     finally:
         app.dependency_overrides.clear()
 
@@ -1121,6 +1238,94 @@ def test_grouping_all_in_one_and_confirm_creates_jobs(monkeypatch):
         detail = client.get("/api/jobs/1").json()
         assert detail["raw_input"] == "topic intro\n\n\nstill same topic"
         assert detail["grouping_source"] == "user"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_grouping_editor_can_merge_split_delete_and_add_groups():
+    try:
+        client = _client_with_db()
+        response = client.post(
+            "/items/parse",
+            data={"input_text": "Alpha\nhttps://example.com/a\nBeta\nhttps://example.com/b"},
+            follow_redirects=False,
+        )
+        session_url = response.headers["location"]
+
+        merged = client.post(
+            f"{session_url}/merge",
+            data={
+                "source_type": ["url", "url"],
+                "raw_input": ["Alpha\nhttps://example.com/a", "Beta\nhttps://example.com/b"],
+                "merge_index": "0",
+            },
+            follow_redirects=False,
+        )
+        assert merged.status_code == 303
+        page = client.get(session_url)
+        assert page.text.count('name="raw_input"') == 1
+        assert "用户合并相邻分组" in page.text
+
+        added = client.post(
+            f"{session_url}/add",
+            data={"source_type": "text", "raw_input": "One\n\n\nTwo"},
+            follow_redirects=False,
+        )
+        assert added.status_code == 303
+        page = client.get(session_url)
+        assert page.text.count('name="raw_input"') == 2
+
+        deleted = client.post(
+            f"{session_url}/delete",
+            data={"source_type": ["text", "text"], "raw_input": ["One\n\n\nTwo", ""], "delete_index": "1"},
+            follow_redirects=False,
+        )
+        assert deleted.status_code == 303
+        page = client.get(session_url)
+        assert page.text.count('name="raw_input"') == 1
+
+        split = client.post(
+            f"{session_url}/split",
+            data={"source_type": "text", "raw_input": "One\n\n\nTwo", "split_index": "0"},
+            follow_redirects=False,
+        )
+        assert split.status_code == 303
+        page = client.get(session_url)
+        assert page.text.count('name="raw_input"') == 2
+        assert "用户按内容拆分当前分组" in page.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_duplicate_parse_job_is_marked_existing_and_links_bookmark():
+    try:
+        client = _client_with_db()
+        with client.TestingSession() as session:
+            bookmark = Bookmark(
+                source_type="term",
+                raw_input="duplicate term",
+                content_hash=content_fingerprint("term", "duplicate term"),
+                keywords=[],
+                title="Existing duplicate",
+                summary="Already saved",
+                content_type="term",
+                source_domain="",
+            )
+            session.add(bookmark)
+            session.commit()
+            bookmark_id = bookmark.id
+
+        parsed = client.post("/api/items/parse", json={"input": "duplicate term", "grouping_mode": "smart"})
+        assert parsed.status_code == 200
+
+        detail = client.get("/api/jobs/1").json()
+        assert detail["status"] == "duplicate"
+        assert detail["stage"] == "已存在收藏"
+        assert detail["matching_bookmark"]["id"] == bookmark_id
+
+        jobs_page = client.get("/jobs")
+        assert "已存在" in jobs_page.text
+        assert f"/bookmarks/{bookmark_id}/edit" in jobs_page.text
     finally:
         app.dependency_overrides.clear()
 

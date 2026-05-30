@@ -9,9 +9,9 @@
   {%- if item.source_type == "url" -%}链接{%- elif item.source_type == "term" -%}词条{%- else -%}段落{%- endif -%}
 {%- endmacro %}
 
-{% macro render_tree_items(items) %}
+{% macro render_tree_items(items, list_key="") %}
   {% if items %}
-    <ul class="directory-item-list">
+    <ul class="directory-item-list" data-directory-items-list{% if list_key %} data-directory-items-key="{{ list_key }}"{% endif %}>
       {% for item in items %}
         <li>
           <div
@@ -42,7 +42,16 @@
 
 {% macro render_bookmark_tree(nodes, selected_path, tree_view="structure", directory_bookmarks_by_id={}) %}
   {% for node in nodes %}
-    <li data-directory-branch>
+    {% set direct_items = directory_bookmarks_by_id.get(node.id, []) %}
+    {% set can_collapse = tree_view == "items" and (direct_items or node.children) %}
+    <li
+      data-directory-branch
+      {% if can_collapse %}
+        class="directory-item-branch"
+        data-directory-item-branch
+        data-directory-items-key="dir-{{ node.id }}"
+      {% endif %}
+    >
       <div
         class="tree-node directory-row {% if selected_path == node.path %}active{% endif %}"
         draggable="true"
@@ -71,9 +80,22 @@
           <button class="circle-action circle-rename" type="button" title="重命名" data-directory-toggle="rename" aria-label="重命名 {{ node.name }}">{{ pencil_icon() }}</button>
           <button class="circle-action circle-delete" type="button" title="删除目录" data-directory-delete data-directory-id="{{ node.id }}" data-directory-path="{{ node.path }}" aria-label="删除 {{ node.name }}">-</button>
         </span>
+        {% if can_collapse %}
+          <button
+            class="directory-items-toggle"
+            type="button"
+            data-directory-items-toggle
+            data-directory-items-key="dir-{{ node.id }}"
+            aria-label="展开或折叠 {{ node.name }} 下的内容"
+            aria-expanded="true"
+            title="展开/折叠内容"
+          >
+            <span aria-hidden="true"></span>
+          </button>
+        {% endif %}
       </div>
       {% if tree_view == "items" %}
-        {{ render_tree_items(directory_bookmarks_by_id.get(node.id, [])) }}
+        {{ render_tree_items(direct_items, "dir-" ~ node.id) }}
       {% endif %}
       <form class="tree-inline-form" data-directory-inline="child" data-directory-form data-directory-action="/api/directories/{{ node.id }}/children" hidden>
         <input name="name" placeholder="子目录名称">
@@ -86,7 +108,7 @@
         <button class="small ghost" type="button" data-directory-cancel>取消</button>
       </form>
       {% if node.children %}
-        <ul>
+        <ul data-directory-children-list>
           {{ render_bookmark_tree(node.children, selected_path, tree_view, directory_bookmarks_by_id) }}
         </ul>
       {% endif %}

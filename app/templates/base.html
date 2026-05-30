@@ -4,29 +4,30 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}拾签{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v=drawer-drop-items">
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v=trash-polish">
   </head>
   <body>
     <div class="page-grain" aria-hidden="true"></div>
+    {% set current_path = request.url.path %}
     <header class="topbar">
       <a class="brand" href="/">
         <span class="brand-mark">拾</span>
-        <span>
+        <span class="brand-copy">
           <strong>拾签</strong>
           <small>Capture Library</small>
         </span>
       </a>
-      <nav>
-        <a href="/">添加</a>
-        <a href="/jobs">队列</a>
-        <a href="/bookmarks">收藏</a>
-        <a href="/trash">回收站</a>
-        <a href="/settings">设置</a>
+      <nav class="top-nav" aria-label="主导航">
+        <a class="nav-link {% if current_path.startswith('/bookmarks') %}active{% endif %}" href="/bookmarks" {% if current_path.startswith('/bookmarks') %}aria-current="page"{% endif %}>收藏</a>
+        <a class="nav-link {% if current_path.startswith('/jobs') or current_path.startswith('/review') %}active{% endif %}" href="/jobs" {% if current_path.startswith('/jobs') or current_path.startswith('/review') %}aria-current="page"{% endif %}>队列</a>
+        <a class="nav-link {% if current_path.startswith('/trash') %}active{% endif %}" href="/trash" {% if current_path.startswith('/trash') %}aria-current="page"{% endif %}>回收站</a>
+        <a class="nav-link {% if current_path.startswith('/settings') %}active{% endif %}" href="/settings" {% if current_path.startswith('/settings') %}aria-current="page"{% endif %}>设置</a>
+        <a class="nav-link nav-add {% if current_path == '/' or current_path.startswith('/grouping') %}active{% endif %}" href="/" {% if current_path == '/' or current_path.startswith('/grouping') %}aria-current="page"{% endif %}>+ 添加</a>
       </nav>
     </header>
     <main class="shell">
       {% block content %}{% endblock %}
     </main>
-    <script src="{{ url_for('static', path='/app.js') }}?v=drawer-drop-items" defer></script>
+    <script src="{{ url_for('static', path='/app.js') }}?v=trash-polish" defer></script>
   </body>
 </html>

@@ -1,22 +1,39 @@
-<section class="grid two" id="trash-lists" data-fragment="trash">
-  <div class="panel">
+{% macro source_label(source_type) -%}
+  {%- if source_type == "url" -%}链接{%- elif source_type == "term" -%}词条{%- else -%}段落{%- endif -%}
+{%- endmacro %}
+
+<section class="trash-board" id="trash-lists" data-fragment="trash">
+  <div class="panel trash-panel">
     <div class="panel-head">
-      <h2>已删除收藏</h2>
-      <span class="muted">{{ bookmarks | length }} 条</span>
+      <div>
+        <div class="section-kicker">Bookmarks</div>
+        <h2>已删除收藏</h2>
+      </div>
+      <span class="trash-count">{{ bookmarks | length }} 条</span>
     </div>
     <div class="trash-list">
       {% for item in bookmarks %}
-        <article class="trash-row" data-card>
-          <div>
-            <div class="type-line">
-              <span class="type-badge">{{ item.source_type }}</span>
-              <span>{{ item.directory.path if item.directory else "未分类" }}</span>
+        <article class="trash-row bookmark-trash" data-card>
+          <div class="trash-main">
+            <div class="trash-meta">
+              <span class="type-badge">{{ source_label(item.source_type) }}</span>
+              <span class="trash-path">{{ item.directory.path if item.directory else "未分类" }}</span>
+              {% if item.deleted_at %}<span>删除于 {{ item.deleted_at|local_datetime }}</span>{% endif %}
             </div>
             <h3>{{ item.title }}</h3>
-            <p class="muted">{{ item.summary }}</p>
-            {% if item.deleted_at %}<p class="muted">删除于 {{ item.deleted_at|local_datetime }}</p>{% endif %}
+            {% if item.summary %}<p class="trash-summary">{{ item.summary }}</p>{% endif %}
+            {% if item.tags %}
+              <div class="trash-tags" aria-label="标签">
+                {% for tag in item.tags[:4] %}
+                  <span>#{{ tag.name }}</span>
+                {% endfor %}
+                {% if item.tags|length > 4 %}
+                  <span>+{{ item.tags|length - 4 }}</span>
+                {% endif %}
+              </div>
+            {% endif %}
           </div>
-          <div class="card-actions">
+          <div class="trash-actions" aria-label="回收站操作">
             <form method="post" action="/bookmarks/{{ item.id }}/restore" data-api-action="/api/bookmarks/{{ item.id }}/restore" data-api-method="POST" data-refresh-fragment="#trash-lists">
               <button class="small" type="submit">恢复</button>
             </form>
@@ -26,30 +43,36 @@
           </div>
         </article>
       {% else %}
-        <p class="muted">没有已删除收藏。</p>
+        <div class="trash-empty">
+          <h3>没有已删除收藏</h3>
+          <p>被删除的收藏会先出现在这里，恢复后回到资料库。</p>
+        </div>
       {% endfor %}
     </div>
   </div>
 
-  <div class="panel">
+  <div class="panel trash-panel">
     <div class="panel-head">
-      <h2>已删除任务</h2>
-      <span class="muted">{{ jobs | length }} 条</span>
+      <div>
+        <div class="section-kicker">Jobs</div>
+        <h2>已删除任务</h2>
+      </div>
+      <span class="trash-count">{{ jobs | length }} 条</span>
     </div>
     <div class="trash-list">
       {% for job in jobs %}
-        <article class="trash-row" data-card>
-          <div>
-            <div class="type-line">
-              <span class="type-badge">{{ job.source_type }}</span>
+        <article class="trash-row job-trash" data-card>
+          <div class="trash-main">
+            <div class="trash-meta">
+              <span class="type-badge">{{ source_label(job.source_type) }}</span>
               <span>#{{ job.id }}</span>
-              <span>{{ job.status }}</span>
+              <span class="status {{ job.status }}">{{ job.status }}</span>
+              {% if job.deleted_at %}<span>删除于 {{ job.deleted_at|local_datetime }}</span>{% endif %}
             </div>
             <h3>{{ job.raw_input or job.input_url }}</h3>
-            {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
-            {% if job.deleted_at %}<p class="muted">删除于 {{ job.deleted_at|local_datetime }}</p>{% endif %}
+            {% if job.error %}<p class="trash-error">{{ job.error }}</p>{% endif %}
           </div>
-          <div class="card-actions">
+          <div class="trash-actions" aria-label="回收站操作">
             <form method="post" action="/jobs/{{ job.id }}/restore" data-api-action="/api/jobs/{{ job.id }}/restore" data-api-method="POST" data-refresh-fragment="#trash-lists">
               <button class="small" type="submit">恢复</button>
             </form>
@@ -59,7 +82,10 @@
           </div>
         </article>
       {% else %}
-        <p class="muted">没有已删除任务。</p>
+        <div class="trash-empty">
+          <h3>没有已删除任务</h3>
+          <p>清理后的解析任务会出现在这里，可恢复或永久删除。</p>
+        </div>
       {% endfor %}
     </div>
   </div>

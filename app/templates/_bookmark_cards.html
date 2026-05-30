@@ -1,3 +1,9 @@
+{% macro toggled_tag_params(current_tags, clicked_tag) -%}
+  {%- for selected_tag in current_tags -%}
+    {%- if selected_tag != clicked_tag -%}&tag={{ selected_tag|urlencode }}{%- endif -%}
+  {%- endfor -%}
+  {%- if clicked_tag not in current_tags -%}&tag={{ clicked_tag|urlencode }}{%- endif -%}
+{%- endmacro %}
 <div class="bookmark-list" id="bookmark-list">
   {% for item in bookmarks %}
     <article class="bookmark-card library-card" data-card data-bookmark-draggable data-bookmark-id="{{ item.id }}" draggable="true">
@@ -15,29 +21,23 @@
             {% endif %}
           </h2>
         </div>
-        <div class="card-actions">
+        <div class="card-actions primary-actions">
           {% if item.source_type == "url" and item.url %}
             <a class="button small" href="/bookmarks/{{ item.id }}/open" target="_blank" rel="noreferrer">打开</a>
-            <button class="small secondary copy-link" type="button" data-url="{{ item.url }}">复制</button>
+          {% else %}
+            <a class="button small" href="/bookmarks/{{ item.id }}/edit">编辑</a>
           {% endif %}
-          <a class="button small secondary" href="/bookmarks/{{ item.id }}/edit">编辑</a>
-          <form
-            method="post"
-            action="/bookmarks/{{ item.id }}/delete"
-            data-api-action="/api/bookmarks/{{ item.id }}"
-            data-api-method="DELETE"
-            data-refresh-fragment="#bookmark-browser"
-            data-confirm="把这个收藏移入回收站？"
-          >
-            <button class="small secondary danger-button" type="submit">删除</button>
-          </form>
         </div>
       </div>
+
+      {% if item.summary %}
+        <p class="summary-preview card-summary">{{ item.summary }}</p>
+      {% endif %}
 
       {% if item.tags or item.keywords %}
         <div class="quick-chips" aria-label="快速标签">
           {% for tag in item.tags[:2] %}
-            <a class="chip tag-chip" href="/bookmarks?tag={{ tag.name|urlencode }}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}&tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">#{{ tag.name }}</a>
+            <a class="chip tag-chip" href="/bookmarks?tree_view={{ tree_view }}{{ toggled_tag_params(tag_filters, tag.name) }}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}" data-partial-link data-preserve-scroll="true" data-target="#bookmark-browser">#{{ tag.name }}</a>
           {% endfor %}
           {% if item.tags|length > 2 %}
             <span class="chip muted-chip">+{{ item.tags|length - 2 }} 标签</span>
@@ -49,7 +49,7 @@
       {% endif %}
 
       <details>
-        <summary>简介与详情</summary>
+        <summary>完整信息与操作</summary>
         {% if item.summary %}
           <p class="summary-preview">{{ item.summary }}</p>
         {% endif %}
@@ -70,7 +70,7 @@
         {% if item.tags %}
           <div class="tags">
             {% for tag in item.tags %}
-              <a href="/bookmarks?tag={{ tag.name|urlencode }}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}&tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">{{ tag.name }}</a>
+              <a href="/bookmarks?tree_view={{ tree_view }}{{ toggled_tag_params(tag_filters, tag.name) }}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}" data-partial-link data-preserve-scroll="true" data-target="#bookmark-browser">{{ tag.name }}</a>
             {% endfor %}
           </div>
         {% endif %}
@@ -87,6 +87,22 @@
         {% if item.raw_input %}
           <pre class="raw-block">{{ item.raw_input }}</pre>
         {% endif %}
+        <div class="card-secondary-actions">
+          {% if item.source_type == "url" and item.url %}
+            <button class="small secondary copy-link" type="button" data-url="{{ item.url }}">复制链接</button>
+          {% endif %}
+          <a class="button small secondary" href="/bookmarks/{{ item.id }}/edit">编辑</a>
+          <form
+            method="post"
+            action="/bookmarks/{{ item.id }}/delete"
+            data-api-action="/api/bookmarks/{{ item.id }}"
+            data-api-method="DELETE"
+            data-refresh-fragment="#bookmark-browser"
+            data-confirm="把这个收藏移入回收站？"
+          >
+            <button class="small secondary danger-button" type="submit">删除</button>
+          </form>
+        </div>
       </details>
     </article>
   {% else %}

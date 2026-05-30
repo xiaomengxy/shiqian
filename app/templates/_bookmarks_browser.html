@@ -1,4 +1,7 @@
 {% from "_bookmark_tree.html" import render_bookmark_tree, render_tree_items %}
+{% macro tag_params(tags) -%}
+  {%- for selected_tag in tags -%}&tag={{ selected_tag|urlencode }}{%- endfor -%}
+{%- endmacro %}
 <section class="library-browser" id="bookmark-browser" data-fragment="bookmarks">
   <aside class="library-sidebar">
     <div class="sidebar-title-row">
@@ -6,35 +9,76 @@
         <div class="section-kicker">Directories</div>
         <h2>目录</h2>
       </div>
-      <span class="muted">{{ directory_count }} 个</span>
+      <span class="sidebar-count">{{ directory_count }} 个</span>
     </div>
     <div class="directory-view-switch" role="group" aria-label="目录显示方式">
       <a
         class="{% if tree_view == 'structure' %}active{% endif %}"
-        href="/bookmarks?tree_view=structure{% if query %}&query={{ query|urlencode }}{% endif %}{% if tag_filter %}&tag={{ tag_filter|urlencode }}{% endif %}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}"
+        href="/bookmarks?tree_view=structure{% if query %}&query={{ query|urlencode }}{% endif %}{{ tag_params(tag_filters) }}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}"
         data-directory-view="structure"
         data-partial-link
         data-target="#bookmark-browser"
       >目录结构</a>
       <a
         class="{% if tree_view == 'items' %}active{% endif %}"
-        href="/bookmarks?tree_view=items{% if query %}&query={{ query|urlencode }}{% endif %}{% if tag_filter %}&tag={{ tag_filter|urlencode }}{% endif %}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}"
+        href="/bookmarks?tree_view=items{% if query %}&query={{ query|urlencode }}{% endif %}{{ tag_params(tag_filters) }}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}"
         data-directory-view="items"
         data-partial-link
         data-target="#bookmark-browser"
       >目录 + 条目</a>
     </div>
-    <a class="tree-node virtual-node {% if not directory_filter %}active{% endif %}" href="/bookmarks?tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">
-      <span class="tree-name">全部收藏</span>
-      <span class="tree-count">{{ all_count }}</span>
-    </a>
-    <a class="tree-node virtual-node {% if directory_filter in ['__none__', '未分类'] %}active{% endif %}" href="/bookmarks?directory=__none__&tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser" data-bookmark-drop data-bookmark-directory-id="" data-bookmark-directory-path="__none__">
-      <span class="tree-name">未分类</span>
-      <span class="tree-count">{{ uncategorized_count }}</span>
-    </a>
-    {% if tree_view == "items" %}
-      {{ render_tree_items(uncategorized_bookmarks) }}
-    {% endif %}
+    <div class="sidebar-section">
+      {% if tree_view == "items" and directory_tree %}
+        <div class="virtual-directory-branch directory-item-branch" data-directory-item-branch data-directory-items-key="all-directories">
+          <a class="tree-node virtual-node {% if not directory_filter %}active{% endif %}" href="/bookmarks?tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">
+            <span class="tree-name">全部收藏</span>
+            <span class="tree-count">{{ all_count }}</span>
+          </a>
+          <button
+            class="directory-items-toggle virtual-items-toggle"
+            type="button"
+            data-directory-items-toggle
+            data-directory-items-key="all-directories"
+            data-directory-items-target="#directory-tree-section"
+            aria-label="展开或折叠全部目录"
+            aria-expanded="true"
+            title="展开/折叠目录"
+          >
+            <span aria-hidden="true"></span>
+          </button>
+        </div>
+      {% else %}
+        <a class="tree-node virtual-node {% if not directory_filter %}active{% endif %}" href="/bookmarks?tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">
+          <span class="tree-name">全部收藏</span>
+          <span class="tree-count">{{ all_count }}</span>
+        </a>
+      {% endif %}
+      {% if tree_view == "items" and uncategorized_bookmarks %}
+        <div class="virtual-directory-branch directory-item-branch" data-directory-item-branch data-directory-items-key="uncategorized">
+          <a class="tree-node virtual-node {% if directory_filter in ['__none__', '未分类'] %}active{% endif %}" href="/bookmarks?directory=__none__&tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser" data-bookmark-drop data-bookmark-directory-id="" data-bookmark-directory-path="__none__">
+            <span class="tree-name">未分类</span>
+            <span class="tree-count">{{ uncategorized_count }}</span>
+          </a>
+          <button
+            class="directory-items-toggle virtual-items-toggle"
+            type="button"
+            data-directory-items-toggle
+            data-directory-items-key="uncategorized"
+            aria-label="展开或折叠未分类下的条目"
+            aria-expanded="true"
+            title="展开/折叠条目"
+          >
+            <span aria-hidden="true"></span>
+          </button>
+          {{ render_tree_items(uncategorized_bookmarks, "uncategorized") }}
+        </div>
+      {% else %}
+        <a class="tree-node virtual-node {% if directory_filter in ['__none__', '未分类'] %}active{% endif %}" href="/bookmarks?directory=__none__&tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser" data-bookmark-drop data-bookmark-directory-id="" data-bookmark-directory-path="__none__">
+          <span class="tree-name">未分类</span>
+          <span class="tree-count">{{ uncategorized_count }}</span>
+        </a>
+      {% endif %}
+    </div>
     <div class="root-drop-zone" data-directory-drop data-parent-id="">
       <div class="root-zone-main">
         <div class="root-zone-copy">
@@ -58,13 +102,15 @@
         <button class="small ghost" type="button" data-root-directory-cancel>取消</button>
       </form>
     </div>
-    {% if directory_tree %}
-      <ul class="directory-tree library-tree">
-        {{ render_bookmark_tree(directory_tree, directory_filter, tree_view, directory_bookmarks_by_id) }}
-      </ul>
-    {% else %}
-      <p class="muted">还没有目录。保存收藏时会自动生成，也可以在根目录区域新建。</p>
-    {% endif %}
+    <div class="sidebar-section directory-tree-section" id="directory-tree-section" data-directory-tree-section>
+      {% if directory_tree %}
+        <ul class="directory-tree library-tree">
+          {{ render_bookmark_tree(directory_tree, directory_filter, tree_view, directory_bookmarks_by_id) }}
+        </ul>
+      {% else %}
+        <p class="muted">还没有目录。保存收藏时会自动生成，也可以在根目录区域新建。</p>
+      {% endif %}
+    </div>
     <div class="sidebar-note">
       <strong>目录</strong> 是主归档位置；<strong>标签</strong> 是跨目录主题。删除目录只会把收藏移到未分类，不会删除收藏内容。
     </div>
@@ -80,26 +126,90 @@
       <a class="button" href="/">添加内容</a>
     </div>
 
-    <form class="filters" method="get" action="/bookmarks" data-filter-form data-target="#bookmark-browser">
-      <input type="hidden" name="tree_view" value="{{ tree_view }}">
-      <input type="hidden" name="directory" value="{{ directory_filter }}">
-      <input class="search-input" name="query" value="{{ query }}" placeholder="搜索名称、简介、关键词、原文或链接">
-      <select name="tag" aria-label="标签筛选">
-        <option value="">全部标签</option>
-        {% for tag in tags %}
-          <option value="{{ tag.name }}" {% if tag.name == tag_filter %}selected{% endif %}>{{ tag.name }}</option>
+    <section class="filter-console" aria-label="筛选控制台">
+      <form class="filters" method="get" action="/bookmarks" data-filter-form data-target="#bookmark-browser">
+        <input type="hidden" name="tree_view" value="{{ tree_view }}">
+        <input type="hidden" name="directory" value="{{ directory_filter }}">
+        {% for selected_tag in tag_filters %}
+          <input type="hidden" name="tag" value="{{ selected_tag }}">
         {% endfor %}
-      </select>
-      <select name="sort" aria-label="排序">
-        <option value="updated" {% if sort == "updated" %}selected{% endif %}>最近更新</option>
-        <option value="opened" {% if sort == "opened" %}selected{% endif %}>最近打开</option>
-        <option value="open_count" {% if sort == "open_count" %}selected{% endif %}>打开次数</option>
-      </select>
-      <button type="submit">筛选</button>
-      {% if query or tag_filter or directory_filter %}
-        <a class="button secondary" href="/bookmarks?tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">清空</a>
-      {% endif %}
-    </form>
+        <input class="search-input" name="query" value="{{ query }}" placeholder="搜索名称、简介、关键词、原文或链接">
+        <select name="sort" aria-label="排序">
+          <option value="updated" {% if sort == "updated" %}selected{% endif %}>最近更新</option>
+          <option value="opened" {% if sort == "opened" %}selected{% endif %}>最近打开</option>
+          <option value="open_count" {% if sort == "open_count" %}selected{% endif %}>打开次数</option>
+        </select>
+        <button class="secondary" type="submit">筛选</button>
+        {% if query or tag_filters or directory_filter %}
+          <a class="button secondary clear-filters" href="/bookmarks?tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">清空</a>
+        {% endif %}
+      </form>
+
+      <section class="tag-filter-panel" aria-label="标签筛选">
+        <div class="tag-filter-head">
+          <div>
+            <div class="section-kicker">Topics</div>
+            <strong>标签筛选</strong>
+          </div>
+          {% if tag_filters %}
+            <a
+              class="tag-clear-link"
+              href="/bookmarks?tree_view={{ tree_view }}{% if query %}&query={{ query|urlencode }}{% endif %}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}"
+              data-partial-link
+              data-preserve-scroll="true"
+              data-target="#bookmark-browser"
+            >清除 {{ tag_filters|length }} 个标签</a>
+          {% endif %}
+        </div>
+        {% if tag_filters %}
+          <div class="active-filter-row">
+            {% for selected_tag in tag_filters %}
+              <span>#{{ selected_tag }}</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+        <div class="tag-filter-chips">
+          <a
+            class="tag-filter-chip {% if not tag_filters %}active{% endif %}"
+            href="/bookmarks?tree_view={{ tree_view }}{% if query %}&query={{ query|urlencode }}{% endif %}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}"
+            data-partial-link
+            data-preserve-scroll="true"
+            data-target="#bookmark-browser"
+          >全部标签</a>
+          {% for option in tag_options %}
+            <a
+              class="tag-filter-chip {% if option.active %}active{% endif %}"
+              href="/bookmarks?tree_view={{ tree_view }}{{ tag_params(option['next_tags']) }}{% if query %}&query={{ query|urlencode }}{% endif %}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}"
+              data-partial-link
+              data-preserve-scroll="true"
+              data-target="#bookmark-browser"
+            >
+              <span>#{{ option.name }}{% if option.active %} ×{% endif %}</span>
+              <small>{{ option.count }}</small>
+            </a>
+          {% endfor %}
+        </div>
+        {% if tag_overflow %}
+          <details class="tag-more">
+            <summary>更多标签（{{ tag_overflow|length }}）</summary>
+            <div class="tag-filter-chips">
+              {% for option in tag_overflow %}
+                <a
+                  class="tag-filter-chip {% if option.active %}active{% endif %}"
+                  href="/bookmarks?tree_view={{ tree_view }}{{ tag_params(option['next_tags']) }}{% if query %}&query={{ query|urlencode }}{% endif %}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}{% if sort %}&sort={{ sort|urlencode }}{% endif %}"
+                  data-partial-link
+                  data-preserve-scroll="true"
+                  data-target="#bookmark-browser"
+                >
+                  <span>#{{ option.name }}{% if option.active %} ×{% endif %}</span>
+                  <small>{{ option.count }}</small>
+                </a>
+              {% endfor %}
+            </div>
+          </details>
+        {% endif %}
+      </section>
+    </section>
 
     {% include "_bookmark_cards.html" %}
   </section>

@@ -8,7 +8,8 @@
   {% for job in jobs %}
     {% set raw_text = job.raw_input or job.input_url %}
     {% set type_label = "链接" if job.source_type == "url" else ("词条" if job.source_type == "term" else "段落") %}
-    {% set status_label = "待确认" if job.status == "completed" else ("已保存" if job.status == "saved" else ("失败" if job.status == "failed" else ("处理中" if job.status == "processing" else ("等待中" if job.status == "pending" else job.status)))) %}
+    {% set status_label = "待确认" if job.status == "completed" else ("已保存" if job.status == "saved" else ("已存在" if job.status == "duplicate" else ("失败" if job.status == "failed" else ("处理中" if job.status == "processing" else ("等待中" if job.status == "pending" else job.status))))) %}
+    {% set matching = job.matching_bookmark if job.matching_bookmark is defined else none %}
     <article class="job-card {{ job.status }}" data-card>
       <div class="job-card-top">
         <div class="job-title-block">
@@ -23,7 +24,17 @@
           {% if job.status == "completed" %}
             <a class="button small" href="/review/{{ job.id }}">确认</a>
           {% elif job.status == "saved" %}
-            <a class="button small secondary" href="/bookmarks">查看收藏</a>
+            {% if matching %}
+              <a class="button small secondary" href="/bookmarks/{{ matching.id }}/edit">查看收藏</a>
+            {% else %}
+              <a class="button small secondary" href="/bookmarks">查看收藏</a>
+            {% endif %}
+          {% elif job.status == "duplicate" %}
+            {% if matching %}
+              <a class="button small secondary" href="/bookmarks/{{ matching.id }}/edit">查看已有</a>
+            {% else %}
+              <a class="button small secondary" href="/bookmarks">查看收藏</a>
+            {% endif %}
           {% elif job.status == "failed" %}
             <form
               method="post"
@@ -72,6 +83,9 @@
             <span>状态更新 {{ job.updated_at|local_datetime }}</span>
           {% endif %}
           <span>{{ job.provider or "local" }}{% if job.model %} · {{ job.model }}{% endif %}</span>
+          {% if matching %}
+            <span>已关联收藏：{{ matching.title }}{% if matching.directory %} · {{ matching.directory.path }}{% endif %}</span>
+          {% endif %}
           {% if job.group_reason %}
             <span>
               分组：{{ job.group_reason }}

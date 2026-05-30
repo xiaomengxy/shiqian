@@ -110,6 +110,26 @@ def test_group_mixed_input_falls_back_when_ai_confidence_is_low(monkeypatch):
     assert all(item.grouping_source == "rules" for item in items)
 
 
+def test_group_mixed_input_falls_back_when_ai_rewrites_raw_input(monkeypatch):
+    def fake_grouping(payload, model, api_key):
+        return (
+            '{"groups": ['
+            '{"source_type": "url", "primary_url": "https://example.com/a", '
+            '"raw_input": "Alpha 文字与链接 https://example.com/a 直接对应", '
+            '"reason": "AI 改写了原文", "confidence": 0.9}'
+            "]}"
+        )
+
+    monkeypatch.setattr("app.services.items._call_deepseek_grouping", fake_grouping)
+    settings = Settings(llm_provider="deepseek", deepseek_api_key="sk-test", deepseek_model="mock")
+
+    items = group_mixed_input("Alpha\nhttps://example.com/a\nBeta\nhttps://example.com/b", None, settings)
+
+    assert len(items) == 2
+    assert all(item.grouping_source == "rules" for item in items)
+    assert "文字与链接" not in items[0].raw_input
+
+
 def test_parse_mixed_input_deduplicates_same_text_block():
     items = parse_mixed_input("prompt engineering\nprompt engineering")
 
