@@ -32,8 +32,33 @@ class UpdateBookmarkRequest(BaseModel):
     url: str | None = None
 
 
+class MoveBookmarkRequest(BaseModel):
+    directory_id: int | None = None
+
+
 class SummaryRewriteRequest(BaseModel):
     length: str = "normal"
     style: str = "note"
     current_summary: str = ""
     provider: str | None = None
+
+
+class DirectoryCreateRequest(BaseModel):
+    path: str = Field(min_length=1)
+
+
+class DirectoryRenameRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class DirectoryMoveRequest(BaseModel):
+    parent_id: int | None = None
+
+
+class DirectoryChildRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class DirectoryBulkDeleteRequest(BaseModel):
+    ids: list[int] = Field(min_length=1)
+    preview: bool = False

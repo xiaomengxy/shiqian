@@ -11,6 +11,11 @@
     <form method="post" action="/jobs/cleanup" data-async-form data-target="#jobs-list" data-confirm="把已完成、已保存和失败的任务移入回收站？">
       <button class="secondary" type="submit">清理结束</button>
     </form>
+    {% if show_saved %}
+      <a class="button secondary" href="/jobs">隐藏已保存</a>
+    {% else %}
+      <a class="button secondary" href="/jobs?show_saved=1">显示已保存{% if saved_count %} · {{ saved_count }}{% endif %}</a>
+    {% endif %}
     <a class="button secondary" href="/trash">回收站</a>
     <a class="button" href="/">继续添加</a>
   </div>

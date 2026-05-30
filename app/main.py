@@ -16,7 +16,19 @@ from app.config import settings
 from app.database import SessionLocal, engine, get_db
 from app.migrations import ensure_runtime_schema
 from app.models import Base, Bookmark, Directory, ParseJob, Tag
-from app.schemas import ConfirmBookmarkRequest, ParseItemsRequest, ParseLinksRequest, SummaryRewriteRequest, UpdateBookmarkRequest
+from app.schemas import (
+    ConfirmBookmarkRequest,
+    DirectoryBulkDeleteRequest,
+    DirectoryChildRequest,
+    DirectoryCreateRequest,
+    DirectoryMoveRequest,
+    MoveBookmarkRequest,
+    DirectoryRenameRequest,
+    ParseItemsRequest,
+    ParseLinksRequest,
+    SummaryRewriteRequest,
+    UpdateBookmarkRequest,
+)
 from app.services.directories import (
     get_or_create_directory_path,
     list_directory_paths,
@@ -106,20 +118,20 @@ def parse_links_form(
 
 
 @app.get("/jobs")
-def jobs(request: Request, db: Session = Depends(get_db)):
+def jobs(request: Request, show_saved: bool = False, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request,
         "jobs.html",
-        _jobs_context(db),
+        _jobs_context(db, show_saved=show_saved),
     )
 
 
 @app.get("/jobs/partials", response_class=HTMLResponse)
-def jobs_partial(request: Request, db: Session = Depends(get_db)):
+def jobs_partial(request: Request, show_saved: bool = False, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request,
         "_jobs_list.html",
-        {"request": request, **_jobs_context(db)},
+        {"request": request, **_jobs_context(db, show_saved=show_saved)},
     )
 
 
@@ -146,6 +158,13 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
     job.deleted_at = datetime.utcnow()
     job.updated_at = job.deleted_at
     db.commit()
+    return RedirectResponse("/jobs", status_code=303)
+
+
+@app.post("/jobs/{job_id}/retry")
+def retry_job(job_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    job = _prepare_job_retry(db, job_id)
+    background_tasks.add_task(_process_job_in_background, job.id, job.provider)
     return RedirectResponse("/jobs", status_code=303)
 
 
@@ -185,6 +204,8 @@ def review(job_id: int, request: Request, db: Session = Depends(get_db)):
             "extracted": job.extracted_json or {},
             "suggestion": suggestion,
             "directories": db.scalars(select(Directory).order_by(Directory.path)).all(),
+            "directory_alternatives": _directory_alternatives(db, suggestion, job.extracted_json or {}),
+            "tags": db.scalars(select(Tag).order_by(Tag.name)).all(),
         },
     )
 
@@ -336,84 +357,33 @@ def purge_bookmark(bookmark_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/directories")
-def directories(
-    request: Request,
-    error: str = "",
-    selected: int | None = None,
-    query: str = "",
-    db: Session = Depends(get_db),
-):
-    context = _directory_workspace_context(db, selected, error, query)
-    return templates.TemplateResponse(
-        request,
-        "directories.html",
-        {"request": request, **context},
-    )
+def directories():
+    return RedirectResponse("/bookmarks", status_code=303)
 
 
 @app.get("/directories/partials", response_class=HTMLResponse)
-def directories_partial(
-    request: Request,
-    selected: int | None = None,
-    error: str = "",
-    query: str = "",
-    db: Session = Depends(get_db),
-):
-    return templates.TemplateResponse(
-        request,
-        "_directories_workspace.html",
-        {"request": request, **_directory_workspace_context(db, selected, error, query)},
-    )
+def directories_partial():
+    raise HTTPException(status_code=404, detail="Directory management moved to bookmarks")
 
 
 @app.post("/directories")
-def create_directory(path: str = Form(...), db: Session = Depends(get_db)):
-    if _is_uncategorized_path(path):
-        return RedirectResponse(
-            "/directories?error=未分类是系统内置归档入口，不需要创建目录。",
-            status_code=303,
-        )
-    directory = get_or_create_directory_path(db, path)
-    db.commit()
-    return RedirectResponse(f"/directories?selected={directory.id}", status_code=303)
+def create_directory():
+    return RedirectResponse("/bookmarks", status_code=303)
 
 
 @app.post("/directories/{directory_id}/children")
-def create_child_directory(directory_id: int, name: str = Form(...), db: Session = Depends(get_db)):
-    parent = db.get(Directory, directory_id)
-    if parent is None:
-        raise HTTPException(status_code=404, detail="Directory not found")
-    child = get_or_create_directory_path(db, f"{parent.path}/{name}")
-    db.commit()
-    return RedirectResponse(f"/directories?selected={child.id}", status_code=303)
+def create_child_directory(directory_id: int):
+    return RedirectResponse("/bookmarks", status_code=303)
 
 
 @app.post("/directories/{directory_id}/rename")
-def rename_directory_route(directory_id: int, name: str = Form(...), db: Session = Depends(get_db)):
-    try:
-        directory = db.get(Directory, directory_id)
-        if directory and directory.parent_id is None and _is_uncategorized_path(name):
-            raise ValueError("未分类是系统内置归档入口，不需要创建目录。")
-        rename_directory(db, directory_id, name)
-        db.commit()
-    except ValueError as exc:
-        db.rollback()
-        return RedirectResponse(f"/directories?error={str(exc)}", status_code=303)
-    return RedirectResponse(f"/directories?selected={directory_id}", status_code=303)
+def rename_directory_route(directory_id: int):
+    return RedirectResponse("/bookmarks", status_code=303)
 
 
 @app.post("/directories/{directory_id}/move")
-def move_directory_route(directory_id: int, parent_id: int | None = Form(None), db: Session = Depends(get_db)):
-    try:
-        directory = db.get(Directory, directory_id)
-        if directory and parent_id is None and _is_uncategorized_path(directory.name):
-            raise ValueError("未分类是系统内置归档入口，不需要创建目录。")
-        move_directory(db, directory_id, parent_id)
-        db.commit()
-    except ValueError as exc:
-        db.rollback()
-        return RedirectResponse(f"/directories?error={str(exc)}", status_code=303)
-    return RedirectResponse(f"/directories?selected={directory_id}", status_code=303)
+def move_directory_route(directory_id: int):
+    return RedirectResponse("/bookmarks", status_code=303)
 
 
 @app.get("/trash")
@@ -596,6 +566,105 @@ def rewrite_job_summary_api(job_id: int, payload: SummaryRewriteRequest, db: Ses
     }
 
 
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job_api(job_id: int, db: Session = Depends(get_db)):
+    job = _prepare_job_retry(db, job_id)
+    _process_job(db, job.id, job.provider)
+    db.refresh(job)
+    return {
+        "id": job.id,
+        "status": job.status,
+        "stage": job.stage,
+        "progress_percent": job.progress_percent,
+        "error": job.error,
+    }
+
+
+@app.post("/api/directories")
+def create_directory_api(payload: DirectoryCreateRequest, db: Session = Depends(get_db)):
+    if _is_uncategorized_path(payload.path):
+        raise HTTPException(status_code=400, detail="未分类是系统内置归档入口，不需要创建目录。")
+    directory = get_or_create_directory_path(db, payload.path)
+    db.commit()
+    db.refresh(directory)
+    return _directory_payload(directory)
+
+
+@app.post("/api/directories/{directory_id}/rename")
+def rename_directory_api(directory_id: int, payload: DirectoryRenameRequest, db: Session = Depends(get_db)):
+    try:
+        directory = db.get(Directory, directory_id)
+        if directory and directory.parent_id is None and _is_uncategorized_path(payload.name):
+            raise ValueError("未分类是系统内置归档入口，不需要创建目录。")
+        directory = rename_directory(db, directory_id, payload.name)
+        db.commit()
+        db.refresh(directory)
+        return _directory_payload(directory)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/directories/{directory_id}/move")
+def move_directory_api(directory_id: int, payload: DirectoryMoveRequest, db: Session = Depends(get_db)):
+    try:
+        directory = db.get(Directory, directory_id)
+        if directory and payload.parent_id is None and _is_uncategorized_path(directory.name):
+            raise ValueError("未分类是系统内置归档入口，不需要创建目录。")
+        directory = move_directory(db, directory_id, payload.parent_id)
+        db.commit()
+        db.refresh(directory)
+        return _directory_payload(directory)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/directories/{directory_id}/children")
+def create_child_directory_api(directory_id: int, payload: DirectoryChildRequest, db: Session = Depends(get_db)):
+    parent = db.get(Directory, directory_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    child_path = f"{parent.path}/{payload.name}"
+    if _is_uncategorized_path(child_path):
+        raise HTTPException(status_code=400, detail="未分类是系统内置归档入口，不需要创建目录。")
+    child = get_or_create_directory_path(db, child_path)
+    db.commit()
+    db.refresh(child)
+    return _directory_payload(child)
+
+
+@app.get("/api/directories/{directory_id}/delete-preview")
+def directory_delete_preview_api(directory_id: int, db: Session = Depends(get_db)):
+    directory = db.get(Directory, directory_id)
+    if directory is None:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    return _directory_delete_preview(db, [directory])
+
+
+@app.delete("/api/directories/{directory_id}")
+def delete_directory_api(directory_id: int, db: Session = Depends(get_db)):
+    directory = db.get(Directory, directory_id)
+    if directory is None:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    preview = _delete_directories(db, [directory])
+    db.commit()
+    return {**preview, "deleted": True, "redirect_directory": UNCATEGORIZED_FILTER}
+
+
+@app.post("/api/directories/bulk-delete")
+def bulk_delete_directories_api(payload: DirectoryBulkDeleteRequest, db: Session = Depends(get_db)):
+    directories = list(db.scalars(select(Directory).where(Directory.id.in_(payload.ids))).all())
+    if not directories:
+        raise HTTPException(status_code=404, detail="Directories not found")
+    preview = _directory_delete_preview(db, directories)
+    if payload.preview:
+        return preview
+    preview = _delete_directories(db, directories)
+    db.commit()
+    return {**preview, "deleted": True, "redirect_directory": UNCATEGORIZED_FILTER}
+
+
 @app.delete("/api/jobs/{job_id}")
 def delete_job_api(job_id: int, db: Session = Depends(get_db)):
     job = db.get(ParseJob, job_id)
@@ -726,6 +795,26 @@ def update_bookmark_api(bookmark_id: int, payload: UpdateBookmarkRequest, db: Se
     return {"id": bookmark.id, "updated": True}
 
 
+@app.post("/api/bookmarks/{bookmark_id}/move")
+def move_bookmark_api(bookmark_id: int, payload: MoveBookmarkRequest, db: Session = Depends(get_db)):
+    bookmark = db.get(Bookmark, bookmark_id)
+    if bookmark is None or bookmark.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    directory = db.get(Directory, payload.directory_id) if payload.directory_id else None
+    if payload.directory_id and directory is None:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    if directory and _is_uncategorized_path(directory.path):
+        directory = None
+    bookmark.directory = directory
+    bookmark.updated_at = datetime.utcnow()
+    db.commit()
+    return {
+        "id": bookmark.id,
+        "directory_id": directory.id if directory else None,
+        "directory": directory.path if directory else UNCATEGORIZED_PATH,
+    }
+
+
 @app.delete("/api/bookmarks/{bookmark_id}")
 def delete_bookmark_api(bookmark_id: int, db: Session = Depends(get_db)):
     bookmark = db.get(Bookmark, bookmark_id)
@@ -852,6 +941,125 @@ def _normalized_job_suggestion(db: Session, job: ParseJob) -> dict | None:
     return normalize_suggestion(job.suggestion_json, list_directory_paths(db))
 
 
+def _directory_alternatives(db: Session, suggestion: dict, extracted: dict) -> list[dict]:
+    directories = db.scalars(
+        select(Directory)
+        .where(Directory.path != UNCATEGORIZED_PATH, ~Directory.path.like(f"{UNCATEGORIZED_PATH}/%"))
+        .order_by(Directory.path)
+    ).all()
+    values: list[dict] = []
+    seen: set[str] = set()
+
+    def add(path: str, reason: str, weight: int = 0) -> None:
+        normalized = UNCATEGORIZED_PATH if _is_uncategorized_path(path) else normalize_directory_path(path)
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        values.append({"path": normalized, "reason": reason, "weight": weight})
+
+    add(suggestion.get("recommended_directory_path") or UNCATEGORIZED_PATH, "当前推荐", 100)
+    raw_path = suggestion.get("raw_recommended_directory_path")
+    if raw_path and raw_path != suggestion.get("recommended_directory_path"):
+        add(raw_path, "原始 AI 建议", 80)
+    add(UNCATEGORIZED_PATH, "不确定时先暂存", 70)
+
+    terms = {
+        str(value).lower()
+        for value in [
+            extracted.get("title"),
+            extracted.get("source_domain"),
+            suggestion.get("name"),
+            *(suggestion.get("tags") or []),
+            *(suggestion.get("keywords") or []),
+        ]
+        if value
+    }
+    scored: list[tuple[int, Directory]] = []
+    for directory in directories:
+        haystack = directory.path.lower()
+        score = sum(1 for term in terms if term and (term in haystack or haystack in term))
+        if score:
+            scored.append((score, directory))
+    for score, directory in sorted(scored, key=lambda item: (-item[0], item[1].path))[:4]:
+        add(directory.path, "匹配标签或关键词", 50 + score)
+    for directory in directories[:4]:
+        add(directory.path, "已有目录", 10)
+        if len(values) >= 6:
+            break
+    return values[:6]
+
+
+def _directory_payload(directory: Directory) -> dict:
+    return {
+        "id": directory.id,
+        "name": directory.name,
+        "path": directory.path,
+        "parent_id": directory.parent_id,
+        "depth": directory.depth,
+    }
+
+
+def _directory_delete_preview(db: Session, directories: list[Directory]) -> dict:
+    roots = _compact_directory_roots(directories)
+    if not roots:
+        raise HTTPException(status_code=404, detail="Directories not found")
+    subtree = _directory_subtree(db, roots)
+    bookmark_count = (
+        db.scalar(
+            select(func.count(Bookmark.id)).where(
+                Bookmark.deleted_at.is_(None),
+                Bookmark.directory_id.in_([directory.id for directory in subtree]),
+            )
+        )
+        if subtree
+        else 0
+    ) or 0
+    return {
+        "directory_count": len(subtree),
+        "root_count": len(roots),
+        "children_count": max(len(subtree) - len(roots), 0),
+        "bookmark_count": bookmark_count,
+        "paths": [directory.path for directory in roots],
+    }
+
+
+def _delete_directories(db: Session, directories: list[Directory]) -> dict:
+    roots = _compact_directory_roots(directories)
+    preview = _directory_delete_preview(db, roots)
+    subtree = _directory_subtree(db, roots)
+    subtree_ids = [directory.id for directory in subtree]
+    if subtree_ids:
+        for bookmark in db.scalars(select(Bookmark).where(Bookmark.directory_id.in_(subtree_ids))):
+            bookmark.directory_id = None
+            bookmark.updated_at = datetime.utcnow()
+    for directory in roots:
+        db.delete(directory)
+    return preview
+
+
+def _compact_directory_roots(directories: list[Directory]) -> list[Directory]:
+    valid = [directory for directory in directories if directory and not _is_uncategorized_path(directory.path)]
+    if len(valid) != len(directories):
+        raise HTTPException(status_code=400, detail="Built-in uncategorized directory cannot be deleted")
+    ordered = sorted({directory.id: directory for directory in valid}.values(), key=lambda item: item.path)
+    roots: list[Directory] = []
+    for directory in ordered:
+        if any(directory.path == root.path or directory.path.startswith(f"{root.path}/") for root in roots):
+            continue
+        roots.append(directory)
+    return roots
+
+
+def _directory_subtree(db: Session, roots: list[Directory]) -> list[Directory]:
+    if not roots:
+        return []
+    conditions = []
+    for directory in roots:
+        conditions.append(Directory.path == directory.path)
+        conditions.append(Directory.path.like(f"{directory.path}/%"))
+    return list(db.scalars(select(Directory).where(or_(*conditions)).order_by(Directory.path)).all())
+
+
 def _confirm_bookmark(
     db: Session,
     job_id: int,
@@ -971,18 +1179,48 @@ def _update_bookmark(
     return bookmark
 
 
-def _recent_jobs(db: Session, limit: int) -> list[ParseJob]:
+def _recent_jobs(db: Session, limit: int, show_saved: bool = False) -> list[ParseJob]:
     jobs = list(
         db.scalars(
-            select(ParseJob).where(ParseJob.deleted_at.is_(None)).order_by(ParseJob.created_at.desc()).limit(limit)
+            select(ParseJob).where(ParseJob.deleted_at.is_(None)).order_by(ParseJob.created_at.desc()).limit(limit * 2)
         ).all()
     )
     _reconcile_saved_jobs(db, jobs)
+    if not show_saved:
+        jobs = [job for job in jobs if job.status != "saved"]
+    jobs = jobs[:limit]
     return jobs
 
 
-def _jobs_context(db: Session) -> dict:
-    return {"jobs": _recent_jobs(db, limit=100), "has_active_jobs": _has_active_jobs(db)}
+def _jobs_context(db: Session, show_saved: bool = False) -> dict:
+    jobs = _recent_jobs(db, limit=100, show_saved=show_saved)
+    saved_count = db.scalar(
+        select(func.count(ParseJob.id)).where(ParseJob.deleted_at.is_(None), ParseJob.status == "saved")
+    ) or 0
+    return {
+        "jobs": jobs,
+        "has_active_jobs": _has_active_jobs(db),
+        "show_saved": show_saved,
+        "saved_count": saved_count,
+    }
+
+
+def _prepare_job_retry(db: Session, job_id: int) -> ParseJob:
+    job = db.get(ParseJob, job_id)
+    if job is None or job.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in ["pending", "processing"]:
+        raise HTTPException(status_code=400, detail="Running jobs cannot be retried")
+    if job.status == "saved":
+        raise HTTPException(status_code=400, detail="Saved jobs cannot be retried")
+    job.status = "pending"
+    job.stage = "等待重试"
+    job.progress_percent = 0
+    job.error = None
+    job.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(job)
+    return job
 
 
 def _reconcile_saved_jobs(db: Session, jobs: list[ParseJob]) -> None:
@@ -1069,6 +1307,8 @@ def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str,
         "query": query,
         "tag_filter": tag,
         "directory_filter": directory,
+        "current_directory": current_directory,
+        "directory_count": len(directory_items),
         "sort": sort,
         "view_title": view_title,
     }
@@ -1182,73 +1422,6 @@ def _sum_directory_counts(node: dict) -> int:
         total += _sum_directory_counts(child)
     node["count"] = total
     return total
-
-
-def _directory_workspace_context(db: Session, selected: int | None, error: str = "", query: str = "") -> dict:
-    all_directories = db.scalars(
-        select(Directory)
-        .where(Directory.path != UNCATEGORIZED_PATH, ~Directory.path.like(f"{UNCATEGORIZED_PATH}/%"))
-        .order_by(Directory.path)
-    ).all()
-    directory_items = _filter_directory_items(all_directories, query)
-    visible_ids = {directory.id for directory in directory_items}
-    selected_directory = db.get(Directory, selected) if selected and selected in visible_ids else None
-    if selected_directory is None:
-        selected_directory = directory_items[0] if directory_items else None
-    direct_counts = _directory_bookmark_counts(db)
-    directory_tree = _build_directory_tree(directory_items, direct_counts)
-    total_counts = _flatten_tree_counts(directory_tree)
-    return {
-        "directory_query": query,
-        "total_directory_count": len(all_directories),
-        "directories": directory_items,
-        "directory_tree": directory_tree,
-        "selected_directory": selected_directory,
-        "bookmark_counts": direct_counts,
-        "total_bookmark_counts": total_counts,
-        "error": error,
-    }
-
-
-def _filter_directory_items(directories: list[Directory], query: str) -> list[Directory]:
-    term = query.strip().lower()
-    if not term:
-        return directories
-    by_id = {directory.id: directory for directory in directories}
-    children: dict[int, list[int]] = {}
-    for directory in directories:
-        if directory.parent_id in by_id:
-            children.setdefault(directory.parent_id, []).append(directory.id)
-
-    included: set[int] = set()
-
-    def include_descendants(directory_id: int) -> None:
-        for child_id in children.get(directory_id, []):
-            if child_id in included:
-                continue
-            included.add(child_id)
-            include_descendants(child_id)
-
-    for directory in directories:
-        if term not in directory.name.lower() and term not in directory.path.lower():
-            continue
-        current: Directory | None = directory
-        while current and current.id in by_id:
-            if current.id in included:
-                break
-            included.add(current.id)
-            current = by_id.get(current.parent_id) if current.parent_id else None
-        include_descendants(directory.id)
-
-    return [directory for directory in directories if directory.id in included]
-
-
-def _flatten_tree_counts(nodes: list[dict]) -> dict[int, int]:
-    counts: dict[int, int] = {}
-    for node in nodes:
-        counts[node["id"]] = node["count"]
-        counts.update(_flatten_tree_counts(node["children"]))
-    return counts
 
 
 def _trash_context(db: Session) -> dict:

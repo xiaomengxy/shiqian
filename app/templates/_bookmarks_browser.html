@@ -1,24 +1,48 @@
 {% from "_bookmark_tree.html" import render_bookmark_tree %}
 <section class="library-browser" id="bookmark-browser" data-fragment="bookmarks">
   <aside class="library-sidebar">
-    <div class="section-kicker">Library</div>
-    <a class="tree-node {% if not directory_filter %}active{% endif %}" href="/bookmarks" data-partial-link data-target="#bookmark-browser">
+    <div class="sidebar-title-row">
+      <div>
+        <div class="section-kicker">Directories</div>
+        <h2>目录</h2>
+      </div>
+      <span class="muted">{{ directory_count }} 个</span>
+    </div>
+    <a class="tree-node virtual-node {% if not directory_filter %}active{% endif %}" href="/bookmarks" data-partial-link data-target="#bookmark-browser">
       <span class="tree-name">全部收藏</span>
       <span class="tree-count">{{ all_count }}</span>
     </a>
-    <a class="tree-node {% if directory_filter in ['__none__', '未分类'] %}active{% endif %}" href="/bookmarks?directory=__none__" data-partial-link data-target="#bookmark-browser">
+    <a class="tree-node virtual-node {% if directory_filter in ['__none__', '未分类'] %}active{% endif %}" href="/bookmarks?directory=__none__" data-partial-link data-target="#bookmark-browser" data-bookmark-drop data-bookmark-directory-id="" data-bookmark-directory-path="__none__">
       <span class="tree-name">未分类</span>
       <span class="tree-count">{{ uncategorized_count }}</span>
     </a>
+    <div class="root-drop-zone" data-directory-drop data-parent-id="">
+      <div class="root-zone-main">
+        <div class="root-zone-copy">
+          <strong>根目录</strong>
+          <span>拖到这里成为根目录</span>
+        </div>
+        <div class="root-zone-actions">
+          <button class="circle-action circle-add" type="button" title="新建根目录" data-root-directory-toggle aria-label="新建根目录">+</button>
+          <button class="small secondary" type="button" data-directory-bulk-toggle>批量</button>
+          <button class="small danger" type="button" data-directory-bulk-delete hidden>删除选中</button>
+        </div>
+      </div>
+      <form class="root-inline-form" data-root-directory-form data-directory-form data-directory-action="/api/directories" hidden>
+        <input name="path" placeholder="新建根目录，如 技术/AI">
+        <button class="small secondary" type="submit">创建</button>
+        <button class="small ghost" type="button" data-root-directory-cancel>取消</button>
+      </form>
+    </div>
     {% if directory_tree %}
       <ul class="directory-tree library-tree">
         {{ render_bookmark_tree(directory_tree, directory_filter) }}
       </ul>
     {% else %}
-      <p class="muted">还没有目录。保存收藏时会自动生成。</p>
+      <p class="muted">还没有目录。保存收藏时会自动生成，也可以在根目录区域新建。</p>
     {% endif %}
     <div class="sidebar-note">
-      <strong>目录</strong> 是主归档位置；<strong>标签</strong> 是跨目录主题。
+      <strong>目录</strong> 是主归档位置；<strong>标签</strong> 是跨目录主题。删除目录只会把收藏移到未分类，不会删除收藏内容。
     </div>
   </aside>
 

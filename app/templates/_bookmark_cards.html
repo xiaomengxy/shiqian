@@ -1,6 +1,6 @@
 <div class="bookmark-list" id="bookmark-list">
   {% for item in bookmarks %}
-    <article class="bookmark-card library-card" data-card>
+    <article class="bookmark-card library-card" data-card data-bookmark-draggable data-bookmark-id="{{ item.id }}" draggable="true">
       <div class="bookmark-title-row">
         <div class="bookmark-title-block">
           <div class="type-line">

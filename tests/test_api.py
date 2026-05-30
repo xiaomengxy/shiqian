@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import get_db
 from app.main import app
 from app.migrations import ensure_runtime_schema
-from app.models import Base, Bookmark, Directory
+from app.models import Base, Bookmark, Directory, Tag
 
 
 def _client_with_db():
@@ -523,6 +523,50 @@ def test_rewrite_job_summary_api_updates_review_draft(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_review_page_shows_directory_alternatives_and_tag_options(monkeypatch):
+    def fake_generate(extracted, directories, provider, settings):
+        class Result:
+            provider = "rules"
+            model = "local"
+            error = None
+
+            def __init__(self):
+                self.suggestion = {
+                    "name": "AI note",
+                    "summary": "Summary",
+                    "tags": ["AI"],
+                    "keywords": ["prompt"],
+                    "content_type": extracted["content_type"],
+                    "recommended_directory_path": "技术/AI",
+                    "directory_reason": "test",
+                    "confidence": 1,
+                }
+
+        return Result()
+
+    monkeypatch.setattr("app.main.generate_suggestion", fake_generate)
+
+    try:
+        client = _client_with_db()
+        with client.TestingSession() as session:
+            session.add(Directory(name="技术", path="技术", depth=0))
+            session.add(Directory(name="AI", path="技术/AI", depth=1))
+            session.add(Tag(name="AI", slug="ai"))
+            session.commit()
+
+        parsed = client.post("/api/items/parse", json={"input": "ai prompt note"})
+        job_id = parsed.json()["jobs"][0]["id"]
+        page = client.get(f"/review/{job_id}")
+
+        assert page.status_code == 200
+        assert "目录备选" in page.text
+        assert "技术/AI · 当前推荐" in page.text
+        assert "常用标签" in page.text
+        assert 'data-summary-preset' in page.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_bookmark_soft_delete_restore_purge_and_edit(monkeypatch):
     def fake_generate(extracted, directories, provider, settings):
         class Result:
@@ -638,6 +682,313 @@ def test_job_soft_delete_restore_and_cleanup(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_failed_job_can_be_retried(monkeypatch):
+    calls = {"count": 0}
+
+    def flaky_generate(extracted, directories, provider, settings):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("temporary failure")
+
+        class Result:
+            provider = "rules"
+            model = "local"
+            error = None
+
+            def __init__(self):
+                self.suggestion = {
+                    "name": "Retry term",
+                    "summary": "Summary",
+                    "tags": ["term"],
+                    "keywords": ["retry"],
+                    "content_type": extracted["content_type"],
+                    "recommended_directory_path": "未分类",
+                    "directory_reason": "test",
+                    "confidence": 0.4,
+                }
+
+        return Result()
+
+    monkeypatch.setattr("app.main.generate_suggestion", flaky_generate)
+
+    try:
+        client = _client_with_db()
+        parsed = client.post("/api/items/parse", json={"input": "retry term"})
+        job_id = parsed.json()["jobs"][0]["id"]
+        assert client.get(f"/api/jobs/{job_id}").json()["status"] == "failed"
+
+        retried = client.post(f"/api/jobs/{job_id}/retry")
+        assert retried.status_code == 200
+        body = retried.json()
+        assert body["status"] == "completed"
+        assert body["stage"] == "等待确认"
+        assert body["error"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_jobs_page_hides_saved_by_default(monkeypatch):
+    def fake_generate(extracted, directories, provider, settings):
+        class Result:
+            provider = "rules"
+            model = "local"
+            error = None
+
+            def __init__(self):
+                self.suggestion = {
+                    "name": "Hidden saved term",
+                    "summary": "Summary",
+                    "tags": ["term"],
+                    "keywords": ["hidden"],
+                    "content_type": extracted["content_type"],
+                    "recommended_directory_path": "Inbox",
+                    "directory_reason": "test",
+                    "confidence": 1,
+                }
+
+        return Result()
+
+    monkeypatch.setattr("app.main.generate_suggestion", fake_generate)
+
+    try:
+        client = _client_with_db()
+        parsed = client.post("/api/items/parse", json={"input": "hidden saved term"})
+        job_id = parsed.json()["jobs"][0]["id"]
+        detail = client.get(f"/api/jobs/{job_id}").json()
+        client.post(
+            "/api/bookmarks/confirm",
+            json={
+                "job_id": job_id,
+                "directory_path": detail["suggestion"]["recommended_directory_path"],
+                "tags": detail["suggestion"]["tags"],
+                "keywords": detail["suggestion"]["keywords"],
+                "summary": detail["suggestion"]["summary"],
+                "name": detail["suggestion"]["name"],
+            },
+        )
+
+        default_page = client.get("/jobs")
+        assert "hidden saved term" not in default_page.text
+        assert "已隐藏 1 个已保存任务" in default_page.text
+
+        show_saved_page = client.get("/jobs?show_saved=1")
+        assert "hidden saved term" in show_saved_page.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_directory_json_api_manages_tree_from_bookmarks():
+    try:
+        client = _client_with_db()
+        created = client.post("/api/directories", json={"path": "资料/AI"})
+        assert created.status_code == 200
+        ai_id = created.json()["id"]
+        assert created.json()["path"] == "资料/AI"
+
+        renamed = client.post(f"/api/directories/{ai_id}/rename", json={"name": "Prompt"})
+        assert renamed.status_code == 200
+        assert renamed.json()["path"] == "资料/Prompt"
+
+        child = client.post(f"/api/directories/{ai_id}/children", json={"name": "案例"})
+        assert child.status_code == 200
+        assert child.json()["path"] == "资料/Prompt/案例"
+
+        target = client.post("/api/directories", json={"path": "技术"})
+        target_id = target.json()["id"]
+        moved = client.post(f"/api/directories/{ai_id}/move", json={"parent_id": target_id})
+        assert moved.status_code == 200
+        assert moved.json()["path"] == "技术/Prompt"
+
+        moved_root = client.post(f"/api/directories/{ai_id}/move", json={"parent_id": None})
+        assert moved_root.status_code == 200
+        assert moved_root.json()["path"] == "Prompt"
+
+        bad = client.post("/api/directories", json={"path": "未分类"})
+        assert bad.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_directory_delete_moves_bookmarks_to_uncategorized():
+    try:
+        client = _client_with_db()
+        parent = client.post("/api/directories", json={"path": "资料/AI"}).json()
+        child = client.post(f"/api/directories/{parent['id']}/children", json={"name": "提示词"}).json()
+
+        with client.TestingSession() as session:
+            session.add(
+                Bookmark(
+                    url=None,
+                    canonical_url=None,
+                    content_hash="delete-dir-hash",
+                    source_type="text",
+                    raw_input="prompt note",
+                    keywords=["prompt"],
+                    title="Prompt note",
+                    summary="Summary",
+                    content_type="text",
+                    source_domain="",
+                    directory_id=child["id"],
+                )
+            )
+            session.commit()
+
+        preview = client.get(f"/api/directories/{parent['id']}/delete-preview")
+        assert preview.status_code == 200
+        assert preview.json()["directory_count"] == 2
+        assert preview.json()["children_count"] == 1
+        assert preview.json()["bookmark_count"] == 1
+
+        deleted = client.delete(f"/api/directories/{parent['id']}")
+        assert deleted.status_code == 200
+        assert deleted.json()["redirect_directory"] == "__none__"
+
+        with client.TestingSession() as session:
+            assert session.scalar(select(Directory).where(Directory.path.like("资料/AI%"))) is None
+            bookmark = session.scalar(select(Bookmark).where(Bookmark.content_hash == "delete-dir-hash"))
+            assert bookmark.directory_id is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_directory_bulk_delete_dedupes_parent_child_selection():
+    try:
+        client = _client_with_db()
+        root = client.post("/api/directories", json={"path": "资料/AI"}).json()
+        child = client.post(f"/api/directories/{root['id']}/children", json={"name": "案例"}).json()
+        other = client.post("/api/directories", json={"path": "数据库"}).json()
+
+        with client.TestingSession() as session:
+            session.add_all(
+                [
+                    Bookmark(
+                        url=None,
+                        canonical_url=None,
+                        content_hash="bulk-dir-a",
+                        source_type="text",
+                        raw_input="ai case",
+                        keywords=[],
+                        title="AI case",
+                        summary="Summary",
+                        content_type="text",
+                        source_domain="",
+                        directory_id=child["id"],
+                    ),
+                    Bookmark(
+                        url=None,
+                        canonical_url=None,
+                        content_hash="bulk-dir-b",
+                        source_type="text",
+                        raw_input="database note",
+                        keywords=[],
+                        title="Database note",
+                        summary="Summary",
+                        content_type="text",
+                        source_domain="",
+                        directory_id=other["id"],
+                    ),
+                ]
+            )
+            session.commit()
+
+        preview = client.post(
+            "/api/directories/bulk-delete",
+            json={"ids": [root["id"], child["id"], other["id"]], "preview": True},
+        )
+        assert preview.status_code == 200
+        assert preview.json()["root_count"] == 2
+        assert preview.json()["directory_count"] == 3
+        assert preview.json()["bookmark_count"] == 2
+
+        deleted = client.post("/api/directories/bulk-delete", json={"ids": [root["id"], child["id"], other["id"]]})
+        assert deleted.status_code == 200
+
+        with client.TestingSession() as session:
+            assert session.scalar(select(Directory).where(Directory.path.like("资料/AI%"))) is None
+            assert session.scalar(select(Directory).where(Directory.path.like("数据库%"))) is None
+            assert all(
+                bookmark.directory_id is None
+                for bookmark in session.scalars(select(Bookmark).where(Bookmark.content_hash.in_(["bulk-dir-a", "bulk-dir-b"]))).all()
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bookmark_move_api_updates_directory():
+    try:
+        client = _client_with_db()
+        target = client.post("/api/directories", json={"path": "资料/AI"}).json()
+        with client.TestingSession() as session:
+            session.add(
+                Bookmark(
+                    url=None,
+                    canonical_url=None,
+                    content_hash="move-bookmark-hash",
+                    source_type="text",
+                    raw_input="move note",
+                    keywords=[],
+                    title="Move note",
+                    summary="Summary",
+                    content_type="text",
+                    source_domain="",
+                    directory_id=None,
+                )
+            )
+            session.commit()
+            bookmark_id = session.scalar(select(Bookmark.id).where(Bookmark.content_hash == "move-bookmark-hash"))
+
+        moved = client.post(f"/api/bookmarks/{bookmark_id}/move", json={"directory_id": target["id"]})
+        assert moved.status_code == 200
+        assert moved.json()["directory"] == "资料/AI"
+
+        moved_uncategorized = client.post(f"/api/bookmarks/{bookmark_id}/move", json={"directory_id": None})
+        assert moved_uncategorized.status_code == 200
+        assert moved_uncategorized.json()["directory_id"] is None
+
+        with client.TestingSession() as session:
+            bookmark = session.get(Bookmark, bookmark_id)
+            assert bookmark.directory_id is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bookmarks_sidebar_renders_directory_management_controls():
+    try:
+        client = _client_with_db()
+        client.post("/api/directories", json={"path": "资料/AI"})
+
+        page = client.get("/bookmarks/partials?directory=资料")
+        assert page.status_code == 200
+        assert 'data-directory-form' in page.text
+        assert 'data-directory-draggable' in page.text
+        assert 'data-directory-drop' in page.text
+        assert 'data-directory-delete' in page.text
+        assert 'data-root-directory-toggle' in page.text
+        assert 'data-bookmark-drop' in page.text
+        assert '<svg aria-hidden="true" viewBox="0 0 24 24"' in page.text
+        assert 'inline-create-form' not in page.text
+        assert 'data-directory-bulk-delete' in page.text
+        assert "拖到这里成为根目录" in page.text
+        assert "完整目录管理" not in page.text
+        assert "Selected" not in page.text
+        assert "新增子目录" in page.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_directories_page_redirects_to_bookmarks():
+    try:
+        client = _client_with_db()
+        response = client.get("/directories", follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/bookmarks"
+
+        partial = client.get("/directories/partials")
+        assert partial.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_running_job_cannot_be_deleted(monkeypatch):
     monkeypatch.setattr("app.main._process_job_in_background", lambda job_id, provider: None)
 
@@ -701,15 +1052,6 @@ def test_bookmark_partials_filter_directory_and_tag(monkeypatch):
         assert 'id="bookmark-browser"' in response.text
         assert "ai note" in response.text
         assert "database note" not in response.text
-
-        directories = client.get("/directories/partials")
-        assert directories.status_code == 200
-        assert 'id="directory-workspace"' in directories.text
-
-        searched_directories = client.get("/directories/partials?query=AI")
-        assert searched_directories.status_code == 200
-        assert "技术/AI" in searched_directories.text
-        assert "技术/数据库" not in searched_directories.text
 
         trash = client.get("/trash/partials")
         assert trash.status_code == 200

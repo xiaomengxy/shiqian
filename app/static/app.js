@@ -1,13 +1,14 @@
 (() => {
   const partialMap = {
     "/bookmarks": { partial: "/bookmarks/partials", target: "#bookmark-browser" },
-    "/directories": { partial: "/directories/partials", target: "#directory-workspace" },
     "/trash": { partial: "/trash/partials", target: "#trash-lists" },
     "/jobs": { partial: "/jobs/partials", target: "#jobs-list" },
   };
   let autoRefreshTimer = null;
   let liveFilterTimer = null;
   let liveFilterController = null;
+  let draggedDirectoryId = null;
+  let draggedBookmarkId = null;
 
   function asUrl(value) {
     return new URL(value, window.location.origin);
@@ -216,6 +217,160 @@
     }
   }
 
+  async function handleDirectoryForm(form) {
+    setBusy(form, true);
+    try {
+      const payload = {};
+      new FormData(form).forEach((value, key) => {
+        const text = String(value).trim();
+        if (key === "parent_id") {
+          payload[key] = text ? Number(text) : null;
+        } else {
+          payload[key] = text;
+        }
+      });
+      const response = await fetch(form.dataset.directoryAction, {
+        method: form.dataset.directoryMethod || "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "fetch",
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json();
+      await refreshBookmarksForDirectory(data.path);
+      toast("目录已更新");
+    } finally {
+      setBusy(form, false);
+    }
+  }
+
+  function directoryImpactMessage(preview, title = "删除目录") {
+    const paths = (preview.paths || []).join("、");
+    return `${title}：${paths}\n\n将删除 ${preview.directory_count || 0} 个目录（含 ${preview.children_count || 0} 个子目录），${preview.bookmark_count || 0} 条收藏会移到未分类。\n\n收藏内容、标签和关键词不会被删除。确认继续？`;
+  }
+
+  async function fetchJson(url, options = {}) {
+    const response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "fetch",
+        ...(options.headers || {}),
+      },
+      ...options,
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  }
+
+  function toggleDirectoryInline(button) {
+    const branch = button.closest("[data-directory-branch]");
+    if (!branch) return;
+    const mode = button.dataset.directoryToggle;
+    Array.from(branch.children)
+      .filter((child) => child.matches?.("[data-directory-inline]"))
+      .forEach((form) => {
+        const shouldOpen = form.dataset.directoryInline === mode && form.hidden;
+        form.hidden = !shouldOpen;
+        if (shouldOpen) form.querySelector("input")?.focus();
+      });
+  }
+
+  function toggleRootDirectoryForm(button) {
+    const zone = button.closest("[data-directory-drop]");
+    const form = zone?.querySelector("[data-root-directory-form]");
+    if (!form) return;
+    form.hidden = !form.hidden;
+    if (!form.hidden) form.querySelector("input")?.focus();
+  }
+
+  async function deleteDirectory(button) {
+    const id = button.dataset.directoryId;
+    const preview = await fetchJson(`/api/directories/${id}/delete-preview`);
+    if (!window.confirm(directoryImpactMessage(preview))) return;
+    const result = await fetchJson(`/api/directories/${id}`, { method: "DELETE" });
+    await refreshBookmarksForDirectory(result.redirect_directory || "__none__");
+    toast("目录已删除，收藏已移到未分类");
+  }
+
+  function toggleDirectoryBulkMode(button) {
+    const browser = document.querySelector("#bookmark-browser");
+    if (!browser) return;
+    const active = !browser.classList.contains("directory-bulk-mode");
+    browser.classList.toggle("directory-bulk-mode", active);
+    button.textContent = active ? "退出批量" : "批量";
+    const deleteButton = browser.querySelector("[data-directory-bulk-delete]");
+    if (deleteButton) deleteButton.hidden = !active;
+    if (!active) {
+      browser.querySelectorAll("[data-directory-select]").forEach((input) => {
+        input.checked = false;
+      });
+    }
+  }
+
+  async function bulkDeleteDirectories(button) {
+    const browser = button.closest("#bookmark-browser") || document;
+    const ids = Array.from(browser.querySelectorAll("[data-directory-select]:checked")).map((input) =>
+      Number(input.value)
+    );
+    if (!ids.length) {
+      toast("先选择要删除的目录");
+      return;
+    }
+    const preview = await fetchJson("/api/directories/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids, preview: true }),
+    });
+    if (!window.confirm(directoryImpactMessage(preview, "批量删除目录"))) return;
+    const result = await fetchJson("/api/directories/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+    await refreshBookmarksForDirectory(result.redirect_directory || "__none__");
+    toast("目录已批量删除，收藏已移到未分类");
+  }
+
+  async function moveDraggedDirectory(parentId) {
+    if (!draggedDirectoryId) return;
+    if (String(parentId || "") === String(draggedDirectoryId)) return;
+    const response = await fetch(`/api/directories/${draggedDirectoryId}/move`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "fetch",
+      },
+      body: JSON.stringify({ parent_id: parentId ? Number(parentId) : null }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    await refreshBookmarksForDirectory(data.path);
+    toast("目录已移动");
+  }
+
+  async function moveDraggedBookmark(directoryId) {
+    if (!draggedBookmarkId) return;
+    const response = await fetch(`/api/bookmarks/${draggedBookmarkId}/move`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "fetch",
+      },
+      body: JSON.stringify({ directory_id: directoryId ? Number(directoryId) : null }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    await replaceFragment("#bookmark-browser", partialUrlFrom(window.location.href), window.location.href, {
+      history: "replace",
+    });
+    toast(`已移动到 ${data.directory || "未分类"}`);
+  }
+
+  async function refreshBookmarksForDirectory(path) {
+    const nextUrl = `/bookmarks?directory=${encodeURIComponent(path)}`;
+    await replaceFragment("#bookmark-browser", partialUrlFrom(nextUrl), nextUrl);
+  }
+
   async function copyLink(button) {
     const url = button.dataset.url;
     try {
@@ -256,7 +411,47 @@
     }
   }
 
+  function applySummaryPreset(button) {
+    const box = button.closest("[data-summary-tools]");
+    if (!box) return;
+    const length = box.querySelector("[data-summary-length]");
+    const style = box.querySelector("[data-summary-style]");
+    if (length && button.dataset.length) length.value = button.dataset.length;
+    if (style && button.dataset.style) style.value = button.dataset.style;
+    box.querySelector("[data-summary-rewrite]")?.click();
+  }
+
+  function appendToken(button) {
+    const input = document.querySelector(`[name="${button.dataset.appendToken}"]`);
+    if (!input) return;
+    const nextToken = (button.dataset.token || "").trim();
+    if (!nextToken) return;
+    const tokens = input.value
+      .split(",")
+      .map((token) => token.trim())
+      .filter(Boolean);
+    if (!tokens.includes(nextToken)) {
+      tokens.push(nextToken);
+    }
+    input.value = tokens.join(", ");
+    input.focus();
+  }
+
+  function fillNamedInput(button) {
+    const input = document.querySelector(`[name="${button.dataset.fillInput}"]`);
+    if (!input) return;
+    input.value = button.dataset.value || "";
+    input.focus();
+  }
+
   document.addEventListener("click", async (event) => {
+    const summaryPreset = event.target.closest("[data-summary-preset]");
+    if (summaryPreset) {
+      event.preventDefault();
+      applySummaryPreset(summaryPreset);
+      return;
+    }
+
     const rewriteButton = event.target.closest("[data-summary-rewrite]");
     if (rewriteButton) {
       event.preventDefault();
@@ -268,10 +463,81 @@
       return;
     }
 
+    const tokenButton = event.target.closest("[data-append-token]");
+    if (tokenButton) {
+      event.preventDefault();
+      appendToken(tokenButton);
+      return;
+    }
+
+    const fillButton = event.target.closest("[data-fill-input]");
+    if (fillButton) {
+      event.preventDefault();
+      fillNamedInput(fillButton);
+      return;
+    }
+
     const copyButton = event.target.closest(".copy-link");
     if (copyButton) {
       event.preventDefault();
       await copyLink(copyButton);
+      return;
+    }
+
+    const directoryToggle = event.target.closest("[data-directory-toggle]");
+    if (directoryToggle) {
+      event.preventDefault();
+      toggleDirectoryInline(directoryToggle);
+      return;
+    }
+
+    const directoryCancel = event.target.closest("[data-directory-cancel]");
+    if (directoryCancel) {
+      event.preventDefault();
+      directoryCancel.closest("[data-directory-inline]").hidden = true;
+      return;
+    }
+
+    const rootToggle = event.target.closest("[data-root-directory-toggle]");
+    if (rootToggle) {
+      event.preventDefault();
+      toggleRootDirectoryForm(rootToggle);
+      return;
+    }
+
+    const rootCancel = event.target.closest("[data-root-directory-cancel]");
+    if (rootCancel) {
+      event.preventDefault();
+      rootCancel.closest("[data-root-directory-form]").hidden = true;
+      return;
+    }
+
+    const directoryDelete = event.target.closest("[data-directory-delete]");
+    if (directoryDelete) {
+      event.preventDefault();
+      try {
+        await deleteDirectory(directoryDelete);
+      } catch (error) {
+        toast(messageFromError(error));
+      }
+      return;
+    }
+
+    const bulkToggle = event.target.closest("[data-directory-bulk-toggle]");
+    if (bulkToggle) {
+      event.preventDefault();
+      toggleDirectoryBulkMode(bulkToggle);
+      return;
+    }
+
+    const bulkDelete = event.target.closest("[data-directory-bulk-delete]");
+    if (bulkDelete) {
+      event.preventDefault();
+      try {
+        await bulkDeleteDirectories(bulkDelete);
+      } catch (error) {
+        toast(messageFromError(error));
+      }
       return;
     }
 
@@ -288,11 +554,13 @@
   document.addEventListener("submit", async (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
-    if (!form.matches("[data-filter-form], [data-async-form], [data-api-action]")) return;
+    if (!form.matches("[data-filter-form], [data-async-form], [data-api-action], [data-directory-form]")) return;
     event.preventDefault();
     try {
       if (form.matches("[data-filter-form]")) {
         await handleFilterForm(form);
+      } else if (form.matches("[data-directory-form]")) {
+        await handleDirectoryForm(form);
       } else if (form.dataset.apiAction) {
         await handleApiForm(form);
       } else {
@@ -300,6 +568,99 @@
       }
     } catch (error) {
       toast(messageFromError(error));
+    }
+  });
+
+  document.addEventListener("dragstart", (event) => {
+    const card = event.target.closest("[data-bookmark-draggable]");
+    if (card && !event.target.closest("a, button, input, select, textarea, summary, form")) {
+      draggedBookmarkId = card.dataset.bookmarkId;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedBookmarkId);
+      card.classList.add("is-dragging");
+      document.querySelector(".library-sidebar")?.classList.add("is-bookmark-drop-mode");
+      return;
+    }
+
+    const node = event.target.closest("[data-directory-draggable]");
+    if (!node) return;
+    draggedDirectoryId = node.dataset.directoryId;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", draggedDirectoryId);
+    node.classList.add("is-dragging");
+  });
+
+  document.addEventListener("dragend", (event) => {
+    event.target.closest("[data-directory-draggable]")?.classList.remove("is-dragging");
+    event.target.closest("[data-bookmark-draggable]")?.classList.remove("is-dragging");
+    document
+      .querySelectorAll(".is-drop-target, .is-bookmark-drop-target")
+      .forEach((node) => node.classList.remove("is-drop-target", "is-bookmark-drop-target"));
+    document.querySelector(".library-sidebar")?.classList.remove("is-bookmark-drop-mode");
+    draggedDirectoryId = null;
+    draggedBookmarkId = null;
+  });
+
+  document.addEventListener("dragover", (event) => {
+    if (draggedBookmarkId) {
+      const bookmarkTarget = event.target.closest("[data-bookmark-drop]");
+      if (!bookmarkTarget) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      bookmarkTarget.classList.add("is-bookmark-drop-target");
+      return;
+    }
+
+    const target = event.target.closest("[data-directory-drop]");
+    if (!target || !draggedDirectoryId) return;
+    if (String(target.dataset.parentId || "") === String(draggedDirectoryId)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    target.classList.add("is-drop-target");
+  });
+
+  document.addEventListener("dragleave", (event) => {
+    const bookmarkTarget = event.target.closest("[data-bookmark-drop]");
+    if (bookmarkTarget && !bookmarkTarget.contains(event.relatedTarget)) {
+      bookmarkTarget.classList.remove("is-bookmark-drop-target");
+    }
+    const target = event.target.closest("[data-directory-drop]");
+    if (target && !target.contains(event.relatedTarget)) {
+      target.classList.remove("is-drop-target");
+    }
+  });
+
+  document.addEventListener("drop", async (event) => {
+    if (draggedBookmarkId) {
+      const bookmarkTarget = event.target.closest("[data-bookmark-drop]");
+      if (!bookmarkTarget) return;
+      event.preventDefault();
+      bookmarkTarget.classList.remove("is-bookmark-drop-target");
+      try {
+        await moveDraggedBookmark(bookmarkTarget.dataset.bookmarkDirectoryId || null);
+      } catch (error) {
+        toast(messageFromError(error));
+      } finally {
+        draggedBookmarkId = null;
+        document.querySelector(".library-sidebar")?.classList.remove("is-bookmark-drop-mode");
+        document
+          .querySelectorAll(".is-bookmark-drop-target")
+          .forEach((node) => node.classList.remove("is-bookmark-drop-target"));
+      }
+      return;
+    }
+
+    const target = event.target.closest("[data-directory-drop]");
+    if (!target || !draggedDirectoryId) return;
+    event.preventDefault();
+    target.classList.remove("is-drop-target");
+    try {
+      await moveDraggedDirectory(target.dataset.parentId || null);
+    } catch (error) {
+      toast(messageFromError(error));
+    } finally {
+      draggedDirectoryId = null;
+      document.querySelectorAll(".is-drop-target").forEach((node) => node.classList.remove("is-drop-target"));
     }
   });
 

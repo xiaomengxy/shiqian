@@ -1,15 +1,52 @@
+{% macro pencil_icon() -%}
+  <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+    <path d="M4 20h4.3L18.8 9.5a2.1 2.1 0 0 0 0-3L17.5 5.2a2.1 2.1 0 0 0-3 0L4 15.7V20Z"></path>
+    <path d="m13.6 6.1 4.3 4.3"></path>
+  </svg>
+{%- endmacro %}
+
 {% macro render_bookmark_tree(nodes, selected_path) %}
   {% for node in nodes %}
-    <li>
-      <a
-        class="tree-node {% if selected_path == node.path %}active{% endif %}"
-        href="/bookmarks?directory={{ node.path }}"
-        data-partial-link
-        data-target="#bookmark-browser"
+    <li data-directory-branch>
+      <div
+        class="tree-node directory-row {% if selected_path == node.path %}active{% endif %}"
+        draggable="true"
+        data-directory-draggable
+        data-directory-drop
+        data-bookmark-drop
+        data-directory-id="{{ node.id }}"
+        data-parent-id="{{ node.id }}"
+        data-directory-path="{{ node.path }}"
+        data-bookmark-directory-id="{{ node.id }}"
+        data-bookmark-directory-path="{{ node.path }}"
       >
-        <span class="tree-name">{{ node.name }}</span>
-        <span class="tree-count">{{ node.count }}</span>
-      </a>
+        <span class="drag-handle" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </span>
+        <label class="directory-check">
+          <input type="checkbox" value="{{ node.id }}" data-directory-select aria-label="选择 {{ node.name }}">
+        </label>
+        <a class="tree-link" href="/bookmarks?directory={{ node.path }}" data-partial-link data-target="#bookmark-browser">
+          <span class="folder-tab" aria-hidden="true"></span>
+          <span class="tree-name">{{ node.name }}</span>
+          <span class="tree-count">{{ node.count }}</span>
+        </a>
+        <span class="directory-row-actions">
+          <button class="circle-action circle-add" type="button" title="新增子目录" data-directory-toggle="child" aria-label="新增 {{ node.name }} 的子目录">+</button>
+          <button class="circle-action circle-rename" type="button" title="重命名" data-directory-toggle="rename" aria-label="重命名 {{ node.name }}">{{ pencil_icon() }}</button>
+          <button class="circle-action circle-delete" type="button" title="删除目录" data-directory-delete data-directory-id="{{ node.id }}" data-directory-path="{{ node.path }}" aria-label="删除 {{ node.name }}">-</button>
+        </span>
+      </div>
+      <form class="tree-inline-form" data-directory-inline="child" data-directory-form data-directory-action="/api/directories/{{ node.id }}/children" hidden>
+        <input name="name" placeholder="子目录名称">
+        <button class="small secondary" type="submit">创建</button>
+        <button class="small ghost" type="button" data-directory-cancel>取消</button>
+      </form>
+      <form class="tree-inline-form" data-directory-inline="rename" data-directory-form data-directory-action="/api/directories/{{ node.id }}/rename" hidden>
+        <input name="name" value="{{ node.name }}">
+        <button class="small secondary" type="submit">保存</button>
+        <button class="small ghost" type="button" data-directory-cancel>取消</button>
+      </form>
       {% if node.children %}
         <ul>
           {{ render_bookmark_tree(node.children, selected_path) }}

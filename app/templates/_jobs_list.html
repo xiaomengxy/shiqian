@@ -1,4 +1,10 @@
 <section class="job-list" id="jobs-list" data-fragment="jobs" {% if has_active_jobs %}data-auto-refresh="3"{% endif %}>
+  {% if saved_count and not show_saved %}
+    <div class="queue-note">
+      <span>已隐藏 {{ saved_count }} 个已保存任务。</span>
+      <a href="/jobs?show_saved=1">显示</a>
+    </div>
+  {% endif %}
   {% for job in jobs %}
     {% set raw_text = job.raw_input or job.input_url %}
     {% set type_label = "链接" if job.source_type == "url" else ("词条" if job.source_type == "term" else "段落") %}
@@ -19,7 +25,15 @@
           {% elif job.status == "saved" %}
             <a class="button small secondary" href="/bookmarks">查看收藏</a>
           {% elif job.status == "failed" %}
-            <a class="button small secondary danger-link" href="#job-detail-{{ job.id }}">查看错误</a>
+            <form
+              method="post"
+              action="/jobs/{{ job.id }}/retry"
+              data-async-form
+              data-target="#jobs-list"
+            >
+              <button class="small" type="submit">重试</button>
+            </form>
+            <a class="button small secondary danger-link" href="#job-detail-{{ job.id }}">错误</a>
           {% else %}
             <span class="job-live">整理中</span>
           {% endif %}
@@ -77,7 +91,7 @@
   {% else %}
     <div class="empty-state">
       <h2>还没有解析任务</h2>
-      <p>先添加一个链接、词或段落，拾签会在这里显示整理进度。</p>
+      <p>{% if saved_count and not show_saved %}当前只隐藏了已保存任务，可点击上方显示。{% else %}先添加一个链接、词或段落，拾签会在这里显示整理进度。{% endif %}</p>
       <a class="button" href="/">添加内容</a>
     </div>
   {% endfor %}
