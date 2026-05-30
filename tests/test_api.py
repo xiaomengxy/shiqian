@@ -758,6 +758,8 @@ def test_jobs_page_hides_saved_by_default(monkeypatch):
         parsed = client.post("/api/items/parse", json={"input": "hidden saved term"})
         job_id = parsed.json()["jobs"][0]["id"]
         detail = client.get(f"/api/jobs/{job_id}").json()
+        review_page = client.get("/jobs")
+        assert "待确认" in review_page.text
         client.post(
             "/api/bookmarks/confirm",
             json={
@@ -776,6 +778,7 @@ def test_jobs_page_hides_saved_by_default(monkeypatch):
 
         show_saved_page = client.get("/jobs?show_saved=1")
         assert "hidden saved term" in show_saved_page.text
+        assert "已归档" in show_saved_page.text
     finally:
         app.dependency_overrides.clear()
 
@@ -1325,6 +1328,7 @@ def test_duplicate_parse_job_is_marked_existing_and_links_bookmark():
 
         jobs_page = client.get("/jobs")
         assert "已存在" in jobs_page.text
+        assert "已归档" in jobs_page.text
         assert f"/bookmarks/{bookmark_id}/edit" in jobs_page.text
     finally:
         app.dependency_overrides.clear()
@@ -1348,6 +1352,7 @@ def test_running_job_cannot_be_deleted(monkeypatch):
 
         jobs_page = client.get("/jobs")
         assert jobs_page.status_code == 200
+        assert "处理中" in jobs_page.text
 
         deleted = client.delete("/api/jobs/1")
         assert deleted.status_code == 400

@@ -1511,10 +1511,59 @@ def _jobs_context(db: Session, show_saved: bool = False) -> dict:
     ) or 0
     return {
         "jobs": jobs,
+        "job_sections": _job_sections(jobs),
         "has_active_jobs": _has_active_jobs(db),
         "show_saved": show_saved,
         "saved_count": saved_count,
     }
+
+
+def _job_sections(jobs: list[ParseJob]) -> list[dict]:
+    section_defs = [
+        {
+            "key": "active",
+            "title": "处理中",
+            "note": "正在解析或等待后台处理的任务。",
+            "statuses": {"pending", "processing"},
+        },
+        {
+            "key": "review",
+            "title": "待确认",
+            "note": "解析完成，等你审核后保存成收藏。",
+            "statuses": {"completed"},
+        },
+        {
+            "key": "attention",
+            "title": "需处理",
+            "note": "失败或需要人工判断的任务。",
+            "statuses": {"failed"},
+        },
+        {
+            "key": "archived",
+            "title": "已归档",
+            "note": "已经保存或发现重复的历史任务。",
+            "statuses": {"saved", "duplicate"},
+        },
+    ]
+    sections = []
+    assigned: set[int] = set()
+    for section in section_defs:
+        section_jobs = [job for job in jobs if job.status in section["statuses"]]
+        assigned.update(job.id for job in section_jobs)
+        if section_jobs:
+            sections.append({**section, "jobs": section_jobs})
+    other_jobs = [job for job in jobs if job.id not in assigned]
+    if other_jobs:
+        sections.append(
+            {
+                "key": "other",
+                "title": "其他",
+                "note": "未归入常规状态的任务。",
+                "statuses": set(),
+                "jobs": other_jobs,
+            }
+        )
+    return sections
 
 
 def _prepare_job_retry(db: Session, job_id: int) -> ParseJob:
