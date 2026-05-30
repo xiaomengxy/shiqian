@@ -96,6 +96,20 @@ class ParseJob(Base):
     )
 
 
+class ParseSession(Base):
+    __tablename__ = "parse_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    raw_input: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(40))
+    groups_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
 class AppConfig(Base):
     __tablename__ = "app_config"
 

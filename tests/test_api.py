@@ -963,6 +963,8 @@ def test_bookmarks_sidebar_renders_directory_management_controls():
         assert 'data-directory-draggable' in page.text
         assert 'data-directory-drop' in page.text
         assert 'data-directory-delete' in page.text
+        assert 'data-directory-manage-toggle' in page.text
+        assert 'data-directory-manage-done' in page.text
         assert 'data-root-directory-toggle' in page.text
         assert 'data-bookmark-drop' in page.text
         assert '<svg aria-hidden="true" viewBox="0 0 24 24"' in page.text
@@ -972,6 +974,7 @@ def test_bookmarks_sidebar_renders_directory_management_controls():
         assert "完整目录管理" not in page.text
         assert "Selected" not in page.text
         assert "新增子目录" in page.text
+        assert ">改<" not in page.text
     finally:
         app.dependency_overrides.clear()
 
@@ -989,6 +992,57 @@ def test_directories_page_redirects_to_bookmarks():
         app.dependency_overrides.clear()
 
 
+def test_items_form_opens_grouping_preview_before_jobs():
+    try:
+        client = _client_with_db()
+        response = client.post(
+            "/items/parse",
+            data={"input_text": "same topic line one\n\n\nsame topic line two"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/grouping/")
+
+        page = client.get(response.headers["location"])
+        assert page.status_code == 200
+        assert "Grouping Preview" in page.text
+        assert page.text.count('name="raw_input"') == 1
+        assert "全部作为一条" in page.text
+        assert "确认分组" in page.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_grouping_all_in_one_and_confirm_creates_jobs(monkeypatch):
+    monkeypatch.setattr("app.main._process_job_in_background", lambda job_id, provider: None)
+
+    try:
+        client = _client_with_db()
+        response = client.post(
+            "/items/parse",
+            data={"input_text": "topic intro\n\n\nstill same topic"},
+            follow_redirects=False,
+        )
+        session_url = response.headers["location"]
+
+        merged = client.post(f"{session_url}/all-in-one", follow_redirects=False)
+        assert merged.status_code == 303
+
+        confirmed = client.post(
+            f"{session_url}/confirm",
+            data={"source_type": "text", "raw_input": "topic intro\n\n\nstill same topic"},
+            follow_redirects=False,
+        )
+        assert confirmed.status_code == 303
+        assert confirmed.headers["location"] == "/jobs"
+
+        detail = client.get("/api/jobs/1").json()
+        assert detail["raw_input"] == "topic intro\n\n\nstill same topic"
+        assert detail["grouping_source"] == "user"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_running_job_cannot_be_deleted(monkeypatch):
     monkeypatch.setattr("app.main._process_job_in_background", lambda job_id, provider: None)
 
@@ -996,6 +1050,14 @@ def test_running_job_cannot_be_deleted(monkeypatch):
         client = _client_with_db()
         response = client.post("/items/parse", data={"input_text": "pending term"}, follow_redirects=False)
         assert response.status_code == 303
+        session_url = response.headers["location"]
+
+        confirmed = client.post(
+            f"{session_url}/confirm",
+            data={"source_type": "term", "raw_input": "pending term"},
+            follow_redirects=False,
+        )
+        assert confirmed.status_code == 303
 
         jobs_page = client.get("/jobs")
         assert jobs_page.status_code == 200

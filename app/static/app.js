@@ -285,6 +285,33 @@
     if (!form.hidden) form.querySelector("input")?.focus();
   }
 
+  function bookmarkBrowserFrom(node) {
+    return node?.closest?.("#bookmark-browser") || document.querySelector("#bookmark-browser");
+  }
+
+  function isDirectoryManageMode(node) {
+    return Boolean(bookmarkBrowserFrom(node)?.classList.contains("directory-manage-mode"));
+  }
+
+  function setDirectoryManageMode(browser, active) {
+    if (!browser) return;
+    browser.classList.toggle("directory-manage-mode", active);
+    if (active) return;
+    browser.classList.remove("directory-bulk-mode");
+    browser.querySelectorAll("[data-directory-inline], [data-root-directory-form]").forEach((form) => {
+      form.hidden = true;
+    });
+    browser.querySelectorAll("[data-directory-select]").forEach((input) => {
+      input.checked = false;
+    });
+    browser.querySelectorAll("[data-directory-bulk-toggle]").forEach((button) => {
+      button.textContent = "批量";
+    });
+    browser.querySelectorAll("[data-directory-bulk-delete]").forEach((button) => {
+      button.hidden = true;
+    });
+  }
+
   async function deleteDirectory(button) {
     const id = button.dataset.directoryId;
     const preview = await fetchJson(`/api/directories/${id}/delete-preview`);
@@ -484,9 +511,24 @@
       return;
     }
 
+    const manageToggle = event.target.closest("[data-directory-manage-toggle]");
+    if (manageToggle) {
+      event.preventDefault();
+      setDirectoryManageMode(bookmarkBrowserFrom(manageToggle), true);
+      return;
+    }
+
+    const manageDone = event.target.closest("[data-directory-manage-done]");
+    if (manageDone) {
+      event.preventDefault();
+      setDirectoryManageMode(bookmarkBrowserFrom(manageDone), false);
+      return;
+    }
+
     const directoryToggle = event.target.closest("[data-directory-toggle]");
     if (directoryToggle) {
       event.preventDefault();
+      if (!isDirectoryManageMode(directoryToggle)) return;
       toggleDirectoryInline(directoryToggle);
       return;
     }
@@ -501,6 +543,7 @@
     const rootToggle = event.target.closest("[data-root-directory-toggle]");
     if (rootToggle) {
       event.preventDefault();
+      if (!isDirectoryManageMode(rootToggle)) return;
       toggleRootDirectoryForm(rootToggle);
       return;
     }
@@ -515,6 +558,7 @@
     const directoryDelete = event.target.closest("[data-directory-delete]");
     if (directoryDelete) {
       event.preventDefault();
+      if (!isDirectoryManageMode(directoryDelete)) return;
       try {
         await deleteDirectory(directoryDelete);
       } catch (error) {
@@ -526,6 +570,7 @@
     const bulkToggle = event.target.closest("[data-directory-bulk-toggle]");
     if (bulkToggle) {
       event.preventDefault();
+      if (!isDirectoryManageMode(bulkToggle)) return;
       toggleDirectoryBulkMode(bulkToggle);
       return;
     }
@@ -533,6 +578,7 @@
     const bulkDelete = event.target.closest("[data-directory-bulk-delete]");
     if (bulkDelete) {
       event.preventDefault();
+      if (!isDirectoryManageMode(bulkDelete)) return;
       try {
         await bulkDeleteDirectories(bulkDelete);
       } catch (error) {
@@ -584,6 +630,10 @@
 
     const node = event.target.closest("[data-directory-draggable]");
     if (!node) return;
+    if (!isDirectoryManageMode(node)) {
+      event.preventDefault();
+      return;
+    }
     draggedDirectoryId = node.dataset.directoryId;
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", draggedDirectoryId);

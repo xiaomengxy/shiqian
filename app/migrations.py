@@ -17,6 +17,8 @@ def ensure_runtime_schema(engine: Engine) -> None:
             _merge_uncategorized_directory(conn)
         if "parse_jobs" in tables:
             _ensure_parse_jobs(conn)
+        if "parse_sessions" not in tables:
+            _ensure_parse_sessions(conn)
         if "app_config" not in tables:
             _ensure_app_config(conn)
 
@@ -147,6 +149,23 @@ def _ensure_app_config(conn) -> None:
         CREATE TABLE IF NOT EXISTS app_config (
             key VARCHAR(120) NOT NULL PRIMARY KEY,
             value TEXT NOT NULL DEFAULT '',
+            updated_at DATETIME NOT NULL
+        )
+        """
+    )
+
+
+def _ensure_parse_sessions(conn) -> None:
+    now = datetime.utcnow().isoformat(sep=" ")
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS parse_sessions (
+            id INTEGER NOT NULL PRIMARY KEY,
+            raw_input TEXT NOT NULL,
+            provider VARCHAR(40),
+            groups_json JSON NOT NULL DEFAULT '[]',
+            status VARCHAR(40) NOT NULL DEFAULT 'draft',
+            created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL
         )
         """

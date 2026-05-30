@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 分组预览{% endblock %}
+{% block content %}
+<section class="page-heading compact-heading">
+  <div>
+    <div class="section-kicker">Grouping Preview</div>
+    <h1>先确认怎么分组</h1>
+    <p>换行只当作排版线索。你可以先把同一主题合成一条，再确认进入解析队列。</p>
+  </div>
+  <div class="toolbar compact-actions">
+    <a class="button secondary" href="/">返回添加</a>
+    <a class="button secondary" href="/jobs">解析队列</a>
+  </div>
+</section>
+
+<section class="grouping-layout">
+  <aside class="panel grouping-source-panel">
+    <div class="section-kicker">Original</div>
+    <h2>原始输入</h2>
+    <pre class="raw-block">{{ session.raw_input }}</pre>
+  </aside>
+
+  <section class="panel grouping-review-panel">
+    <div class="grouping-toolbar">
+      <div>
+        <div class="section-kicker">Draft Groups</div>
+        <h2>{{ groups|length }} 条候选收藏</h2>
+      </div>
+      <div class="toolbar compact-actions">
+        <form method="post" action="/grouping/{{ session.id }}/all-in-one">
+          <button class="small secondary" type="submit">全部作为一条</button>
+        </form>
+        <form method="post" action="/grouping/{{ session.id }}/split-blank">
+          <button class="small secondary" type="submit">按空行拆</button>
+        </form>
+      </div>
+    </div>
+
+    <form method="post" action="/grouping/{{ session.id }}/confirm" class="grouping-form">
+      {% for group in groups %}
+        <article class="group-card">
+          <div class="group-card-head">
+            <strong>分组 {{ loop.index }}</strong>
+            <span class="chip muted-chip">{{ group.grouping_source or "rules" }} · {{ "%.0f"|format((group.group_confidence or 0) * 100) }}%</span>
+          </div>
+          <label>
+            类型
+            <select name="source_type">
+              <option value="url" {% if group.source_type == "url" %}selected{% endif %}>链接</option>
+              <option value="term" {% if group.source_type == "term" %}selected{% endif %}>词条</option>
+              <option value="text" {% if group.source_type == "text" %}selected{% endif %}>段落</option>
+            </select>
+          </label>
+          <label>
+            内容
+            <textarea name="raw_input" rows="7">{{ group.raw_input }}</textarea>
+          </label>
+          {% if group.group_reason %}
+            <p class="muted">{{ group.group_reason }}</p>
+          {% endif %}
+        </article>
+      {% endfor %}
+      <div class="grouping-confirm">
+        <button type="submit">确认分组，进入解析队列</button>
+      </div>
+    </form>
+  </section>
+</section>
+{% endblock %}

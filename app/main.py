@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import settings
 from app.database import SessionLocal, engine, get_db
 from app.migrations import ensure_runtime_schema
-from app.models import Base, Bookmark, Directory, ParseJob, Tag
+from app.models import Base, Bookmark, Directory, ParseJob, ParseSession, Tag
 from app.schemas import (
     ConfirmBookmarkRequest,
     DirectoryBulkDeleteRequest,
@@ -92,12 +92,96 @@ def parse_items_form(
     db: Session = Depends(get_db),
 ):
     runtime_settings = get_effective_settings(db, settings)
-    items = group_mixed_input(input_text, provider, runtime_settings)
+    items = _preview_group_input(input_text, provider, runtime_settings)
     if not items:
         raise HTTPException(status_code=400, detail="No content found")
+    session = _create_parse_session(db, input_text, provider, items)
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
+@app.get("/grouping/{session_id}")
+def grouping_review(session_id: int, request: Request, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    return templates.TemplateResponse(
+        request,
+        "grouping.html",
+        {
+            "request": request,
+            "session": session,
+            "groups": session.groups_json or [],
+        },
+    )
+
+
+@app.post("/grouping/{session_id}/all-in-one")
+def grouping_all_in_one(session_id: int, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    item = _input_item_from_group(
+        session.raw_input,
+        reason="用户选择全部作为一条收藏",
+        confidence=1.0,
+        grouping_source="user",
+    )
+    session.groups_json = [_group_payload(item)]
+    session.updated_at = datetime.utcnow()
+    db.commit()
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
+@app.post("/grouping/{session_id}/split-blank")
+def grouping_split_blank(session_id: int, db: Session = Depends(get_db)):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    items = parse_mixed_input(session.raw_input)
+    if not items:
+        raise HTTPException(status_code=400, detail="No content found")
+    session.groups_json = [_group_payload(item) for item in items]
+    session.updated_at = datetime.utcnow()
+    db.commit()
+    return RedirectResponse(f"/grouping/{session.id}", status_code=303)
+
+
+@app.post("/grouping/{session_id}/confirm")
+async def grouping_confirm(
+    session_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    session = db.get(ParseSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Grouping session not found")
+    form = await request.form()
+    raw_inputs = [str(value).strip() for value in form.getlist("raw_input")]
+    source_types = [str(value).strip() for value in form.getlist("source_type")]
+    items: list[InputItem] = []
+    for index, raw_input in enumerate(raw_inputs):
+        if not raw_input:
+            continue
+        source_type = source_types[index] if index < len(source_types) else ""
+        items.append(
+            _input_item_from_group(
+                raw_input,
+                source_type=source_type,
+                reason="用户确认分组",
+                confidence=1.0,
+                grouping_source="user",
+            )
+        )
+    if not items:
+        raise HTTPException(status_code=400, detail="No content found")
+    session.groups_json = [_group_payload(item) for item in items]
+    session.status = "confirmed"
+    session.updated_at = datetime.utcnow()
+    db.commit()
     for item in items:
-        job = _create_job(db, item, provider)
-        background_tasks.add_task(_process_job_in_background, job.id, provider)
+        job = _create_job(db, item, session.provider)
+        background_tasks.add_task(_process_job_in_background, job.id, session.provider)
     return RedirectResponse("/jobs", status_code=303)
 
 
@@ -861,6 +945,72 @@ def open_bookmark_api(bookmark_id: int, db: Session = Depends(get_db)):
         "opened_count": bookmark.opened_count,
         "last_opened_at": bookmark.last_opened_at.isoformat() if bookmark.last_opened_at else None,
     }
+
+
+def _create_parse_session(db: Session, raw_input: str, provider: str | None, items: list[InputItem]) -> ParseSession:
+    session = ParseSession(
+        raw_input=raw_input,
+        provider=provider,
+        groups_json=[_group_payload(item) for item in items],
+        status="draft",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def _preview_group_input(raw_input: str, provider: str | None, runtime_settings) -> list[InputItem]:
+    if not extract_urls(raw_input):
+        return [
+            _input_item_from_group(
+                raw_input,
+                reason="纯文本默认先作为一条，空行只作为排版线索",
+                confidence=0.72,
+                grouping_source="review_default",
+            )
+        ]
+    return group_mixed_input(raw_input, provider, runtime_settings)
+
+
+def _group_payload(item: InputItem) -> dict:
+    return {
+        "raw_input": item.raw_input,
+        "source_type": item.source_type,
+        "primary_url": item.primary_url,
+        "group_confidence": item.group_confidence,
+        "group_reason": item.group_reason,
+        "grouping_source": item.grouping_source,
+    }
+
+
+def _input_item_from_group(
+    raw_input: str,
+    *,
+    source_type: str | None = None,
+    reason: str = "用户确认分组",
+    confidence: float = 1.0,
+    grouping_source: str = "user",
+) -> InputItem:
+    raw_input = raw_input.strip()
+    urls = extract_urls(raw_input)
+    clean_source_type = (source_type or "").strip()
+    if clean_source_type not in {"url", "term", "text"}:
+        if urls:
+            clean_source_type = "url"
+        else:
+            clean_source_type = "term" if len(raw_input) <= 40 and "\n" not in raw_input else "text"
+    primary_url = urls[0] if clean_source_type == "url" and urls else None
+    if clean_source_type == "url" and primary_url is None:
+        clean_source_type = "text"
+    return InputItem(
+        raw_input=raw_input,
+        source_type=clean_source_type,
+        primary_url=primary_url,
+        group_confidence=confidence,
+        group_reason=reason,
+        grouping_source=grouping_source,
+    )
 
 
 def _create_job(db: Session, item: InputItem, provider: str | None) -> ParseJob:

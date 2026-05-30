@@ -23,10 +23,15 @@
           <span>拖到这里成为根目录</span>
         </div>
         <div class="root-zone-actions">
-          <button class="circle-action circle-add" type="button" title="新建根目录" data-root-directory-toggle aria-label="新建根目录">+</button>
-          <button class="small secondary" type="button" data-directory-bulk-toggle>批量</button>
-          <button class="small danger" type="button" data-directory-bulk-delete hidden>删除选中</button>
+          <button class="small secondary directory-manage-entry" type="button" data-directory-manage-toggle aria-label="进入目录管理模式">管理</button>
         </div>
+      </div>
+      <div class="directory-manage-panel" aria-label="目录管理操作">
+        <span class="manage-mode-pill">管理模式</span>
+        <button class="circle-action circle-add" type="button" title="新建根目录" data-root-directory-toggle aria-label="新建根目录">+</button>
+        <button class="small secondary" type="button" data-directory-bulk-toggle>批量</button>
+        <button class="small danger" type="button" data-directory-bulk-delete hidden>删除选中</button>
+        <button class="small ghost" type="button" data-directory-manage-done>完成</button>
       </div>
       <form class="root-inline-form" data-root-directory-form data-directory-form data-directory-action="/api/directories" hidden>
         <input name="path" placeholder="新建根目录，如 技术/AI">
