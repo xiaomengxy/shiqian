@@ -5,7 +5,42 @@
   </svg>
 {%- endmacro %}
 
-{% macro render_bookmark_tree(nodes, selected_path) %}
+{% macro item_type_label(item) -%}
+  {%- if item.source_type == "url" -%}链接{%- elif item.source_type == "term" -%}词条{%- else -%}段落{%- endif -%}
+{%- endmacro %}
+
+{% macro render_tree_items(items) %}
+  {% if items %}
+    <ul class="directory-item-list">
+      {% for item in items %}
+        <li>
+          <div
+            class="directory-item-row"
+            draggable="true"
+            data-bookmark-draggable
+            data-bookmark-id="{{ item.id }}"
+            title="拖拽到目录以移动收藏"
+          >
+            <span class="directory-item-drag-handle" data-bookmark-drag-handle aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+            </span>
+            <span class="directory-item-type">{{ item_type_label(item) }}</span>
+            <a class="directory-item-title" href="/bookmarks/{{ item.id }}/edit" title="编辑 {{ item.title }}">{{ item.title }}</a>
+            {% if item.tags %}
+              <span class="directory-item-tags">
+                {% for tag in item.tags[:2] %}
+                  #{{ tag.name }}{% if not loop.last %} {% endif %}
+                {% endfor %}
+              </span>
+            {% endif %}
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endmacro %}
+
+{% macro render_bookmark_tree(nodes, selected_path, tree_view="structure", directory_bookmarks_by_id={}) %}
   {% for node in nodes %}
     <li data-directory-branch>
       <div
@@ -26,7 +61,7 @@
         <label class="directory-check">
           <input type="checkbox" value="{{ node.id }}" data-directory-select aria-label="选择 {{ node.name }}">
         </label>
-        <a class="tree-link" href="/bookmarks?directory={{ node.path }}" data-partial-link data-target="#bookmark-browser">
+        <a class="tree-link" href="/bookmarks?directory={{ node.path|urlencode }}&tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">
           <span class="folder-tab" aria-hidden="true"></span>
           <span class="tree-name">{{ node.name }}</span>
           <span class="tree-count">{{ node.count }}</span>
@@ -37,6 +72,9 @@
           <button class="circle-action circle-delete" type="button" title="删除目录" data-directory-delete data-directory-id="{{ node.id }}" data-directory-path="{{ node.path }}" aria-label="删除 {{ node.name }}">-</button>
         </span>
       </div>
+      {% if tree_view == "items" %}
+        {{ render_tree_items(directory_bookmarks_by_id.get(node.id, [])) }}
+      {% endif %}
       <form class="tree-inline-form" data-directory-inline="child" data-directory-form data-directory-action="/api/directories/{{ node.id }}/children" hidden>
         <input name="name" placeholder="子目录名称">
         <button class="small secondary" type="submit">创建</button>
@@ -49,7 +87,7 @@
       </form>
       {% if node.children %}
         <ul>
-          {{ render_bookmark_tree(node.children, selected_path) }}
+          {{ render_bookmark_tree(node.children, selected_path, tree_view, directory_bookmarks_by_id) }}
         </ul>
       {% endif %}
     </li>

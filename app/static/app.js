@@ -9,6 +9,8 @@
   let liveFilterController = null;
   let draggedDirectoryId = null;
   let draggedBookmarkId = null;
+  const directoryViewKey = "shiqian.directoryViewMode";
+  const directoryViewModes = new Set(["structure", "items"]);
 
   function asUrl(value) {
     return new URL(value, window.location.origin);
@@ -24,6 +26,44 @@
   function targetForUrl(urlLike) {
     const url = asUrl(urlLike);
     return partialMap[url.pathname]?.target || null;
+  }
+
+  function validDirectoryViewMode(value) {
+    return directoryViewModes.has(value) ? value : null;
+  }
+
+  function storedDirectoryViewMode() {
+    try {
+      return validDirectoryViewMode(window.localStorage.getItem(directoryViewKey));
+    } catch {
+      return null;
+    }
+  }
+
+  function setStoredDirectoryViewMode(mode) {
+    const cleanMode = validDirectoryViewMode(mode);
+    if (!cleanMode) return;
+    try {
+      window.localStorage.setItem(directoryViewKey, cleanMode);
+    } catch {
+      // Browser storage can be unavailable in private or restricted contexts.
+    }
+  }
+
+  function directoryViewFromUrl(urlLike) {
+    return validDirectoryViewMode(asUrl(urlLike).searchParams.get("tree_view"));
+  }
+
+  function currentDirectoryViewMode() {
+    return directoryViewFromUrl(window.location.href) || storedDirectoryViewMode() || "structure";
+  }
+
+  function urlWithDirectoryView(urlLike, mode = currentDirectoryViewMode()) {
+    const url = asUrl(urlLike);
+    if (url.pathname !== "/bookmarks") return urlLike;
+    const cleanMode = validDirectoryViewMode(mode) || "structure";
+    url.searchParams.set("tree_view", cleanMode);
+    return `${url.pathname}${url.search}`;
   }
 
   function captureFocus(target) {
@@ -68,6 +108,8 @@
       restoreFocus(focusState);
       if (nextUrl) {
         const historyState = { target: targetSelector };
+        const viewMode = directoryViewFromUrl(nextUrl);
+        if (viewMode) setStoredDirectoryViewMode(viewMode);
         if (options.history === "replace") {
           window.history.replaceState(historyState, "", nextUrl);
         } else {
@@ -152,7 +194,9 @@
   }
 
   async function handlePartialLink(link) {
-    const href = link.getAttribute("href");
+    const requestedView = validDirectoryViewMode(link.dataset.directoryView);
+    const href = urlWithDirectoryView(link.getAttribute("href"), requestedView || currentDirectoryViewMode());
+    if (requestedView) setStoredDirectoryViewMode(requestedView);
     const partialUrl = partialUrlFrom(href);
     const target = link.dataset.target || targetForUrl(href);
     if (!partialUrl || !target) return false;
@@ -166,6 +210,9 @@
       if (String(value).trim()) params.set(key, value);
     });
     const path = form.getAttribute("action") || window.location.pathname;
+    if (path === "/bookmarks" && !params.has("tree_view")) {
+      params.set("tree_view", currentDirectoryViewMode());
+    }
     return `${path}${params.toString() ? `?${params.toString()}` : ""}`;
   }
 
@@ -394,7 +441,7 @@
   }
 
   async function refreshBookmarksForDirectory(path) {
-    const nextUrl = `/bookmarks?directory=${encodeURIComponent(path)}`;
+    const nextUrl = `/bookmarks?directory=${encodeURIComponent(path)}&tree_view=${currentDirectoryViewMode()}`;
     await replaceFragment("#bookmark-browser", partialUrlFrom(nextUrl), nextUrl);
   }
 
@@ -619,7 +666,9 @@
 
   document.addEventListener("dragstart", (event) => {
     const card = event.target.closest("[data-bookmark-draggable]");
-    if (card && !event.target.closest("a, button, input, select, textarea, summary, form")) {
+    const bookmarkHandle = event.target.closest("[data-bookmark-drag-handle]");
+    const blockedBookmarkDrag = event.target.closest("a, button, input, select, textarea, summary, form");
+    if (card && (bookmarkHandle || !blockedBookmarkDrag)) {
       draggedBookmarkId = card.dataset.bookmarkId;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", draggedBookmarkId);
@@ -764,5 +813,19 @@
     }, seconds * 1000);
   }
 
+  async function restoreStoredDirectoryView() {
+    const url = asUrl(window.location.href);
+    if (url.pathname !== "/bookmarks" || url.searchParams.has("tree_view")) return;
+    const mode = storedDirectoryViewMode();
+    if (!mode || mode === "structure") return;
+    const nextUrl = urlWithDirectoryView(window.location.href, mode);
+    try {
+      await replaceFragment("#bookmark-browser", partialUrlFrom(nextUrl), nextUrl, { history: "replace" });
+    } catch (error) {
+      toast(messageFromError(error));
+    }
+  }
+
   setupAutoRefresh();
+  restoreStoredDirectoryView();
 })();

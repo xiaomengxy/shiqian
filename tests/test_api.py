@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -975,6 +977,86 @@ def test_bookmarks_sidebar_renders_directory_management_controls():
         assert "Selected" not in page.text
         assert "新增子目录" in page.text
         assert ">改<" not in page.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_bookmark_sidebar_tree_view_can_show_direct_items():
+    try:
+        client = _client_with_db()
+        with client.TestingSession() as session:
+            root = Directory(name="资料", path="资料", depth=0)
+            child = Directory(name="AI", path="资料/AI", depth=1, parent=root)
+            tag = Tag(name="主题", slug="topic")
+            root_item = Bookmark(
+                source_type="text",
+                raw_input="root item",
+                content_hash="tree-root-item",
+                keywords=[],
+                title="直属条目",
+                summary="Root summary",
+                content_type="text",
+                source_domain="",
+                directory=root,
+                tags=[tag],
+            )
+            child_item = Bookmark(
+                source_type="term",
+                raw_input="child item",
+                content_hash="tree-child-item",
+                keywords=[],
+                title="子目录条目",
+                summary="Child summary",
+                content_type="text",
+                source_domain="",
+                directory=child,
+            )
+            uncategorized = Bookmark(
+                source_type="text",
+                raw_input="uncategorized item",
+                content_hash="tree-uncategorized-item",
+                keywords=[],
+                title="未分类条目",
+                summary="Uncategorized summary",
+                content_type="text",
+                source_domain="",
+            )
+            deleted = Bookmark(
+                source_type="text",
+                raw_input="deleted item",
+                content_hash="tree-deleted-item",
+                keywords=[],
+                title="已删除条目",
+                summary="Deleted summary",
+                content_type="text",
+                source_domain="",
+                directory=root,
+                deleted_at=datetime.utcnow(),
+            )
+            session.add_all([root, child, tag, root_item, child_item, uncategorized, deleted])
+            session.commit()
+            root_item_id = root_item.id
+
+        structure = client.get("/bookmarks/partials?tree_view=structure")
+        assert structure.status_code == 200
+        assert 'data-directory-view="items"' in structure.text
+        assert "directory-item-row" not in structure.text
+
+        items = client.get("/bookmarks/partials?tree_view=items")
+        assert items.status_code == 200
+        assert 'data-directory-view="structure"' in items.text
+        assert "directory-item-row" in items.text
+        assert "data-bookmark-drag-handle" in items.text
+        assert f'data-bookmark-id="{root_item_id}"' in items.text
+        assert "直属条目" in items.text
+        assert "子目录条目" in items.text
+        assert "未分类条目" in items.text
+        assert "#主题" in items.text
+        assert "已删除条目" not in items.text
+
+        filtered = client.get("/bookmarks/partials?tree_view=items&directory=资料")
+        assert filtered.status_code == 200
+        assert 'name="tree_view" value="items"' in filtered.text
     finally:
         app.dependency_overrides.clear()
 

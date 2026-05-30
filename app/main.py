@@ -324,9 +324,10 @@ def bookmarks(
     tag: str = "",
     directory: str = "",
     sort: str = "updated",
+    tree_view: str = "structure",
     db: Session = Depends(get_db),
 ):
-    context = _bookmark_browser_context(db, query, tag, directory, sort)
+    context = _bookmark_browser_context(db, query, tag, directory, sort, tree_view)
     return templates.TemplateResponse(
         request,
         "bookmarks.html",
@@ -341,12 +342,13 @@ def bookmarks_partial(
     tag: str = "",
     directory: str = "",
     sort: str = "updated",
+    tree_view: str = "structure",
     db: Session = Depends(get_db),
 ):
     return templates.TemplateResponse(
         request,
         "_bookmarks_browser.html",
-        {"request": request, **_bookmark_browser_context(db, query, tag, directory, sort)},
+        {"request": request, **_bookmark_browser_context(db, query, tag, directory, sort, tree_view)},
     )
 
 
@@ -1409,7 +1411,8 @@ def _matching_bookmark_for_job(db: Session, job: ParseJob) -> Bookmark | None:
     return db.scalar(select(Bookmark).where(Bookmark.deleted_at.is_(None), Bookmark.content_hash == content_hash))
 
 
-def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str, sort: str) -> dict:
+def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str, sort: str, tree_view: str) -> dict:
+    tree_view = tree_view if tree_view in {"structure", "items"} else "structure"
     directory_items = db.scalars(
         select(Directory)
         .where(Directory.path != UNCATEGORIZED_PATH, ~Directory.path.like(f"{UNCATEGORIZED_PATH}/%"))
@@ -1418,6 +1421,10 @@ def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str,
     direct_counts = _directory_bookmark_counts(db)
     directory_tree = _build_directory_tree(directory_items, direct_counts)
     items = _query_bookmarks(db, query=query, tag=tag, directory=directory, sort=sort)
+    directory_bookmarks_by_id: dict[int, list[Bookmark]] = {}
+    uncategorized_bookmarks: list[Bookmark] = []
+    if tree_view == "items":
+        directory_bookmarks_by_id, uncategorized_bookmarks = _directory_tree_bookmarks(db)
     all_count = db.scalar(select(func.count(Bookmark.id)).where(Bookmark.deleted_at.is_(None))) or 0
     uncategorized_count = (
         db.scalar(
@@ -1453,6 +1460,8 @@ def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str,
         "uncategorized_count": uncategorized_count,
         "directories": directory_items,
         "directory_tree": directory_tree,
+        "directory_bookmarks_by_id": directory_bookmarks_by_id,
+        "uncategorized_bookmarks": uncategorized_bookmarks,
         "tags": db.scalars(select(Tag).order_by(Tag.name)).all(),
         "query": query,
         "tag_filter": tag,
@@ -1460,6 +1469,7 @@ def _bookmark_browser_context(db: Session, query: str, tag: str, directory: str,
         "current_directory": current_directory,
         "directory_count": len(directory_items),
         "sort": sort,
+        "tree_view": tree_view,
         "view_title": view_title,
     }
 
@@ -1524,6 +1534,23 @@ def _directory_bookmark_counts(db: Session) -> dict[int, int]:
         .group_by(Bookmark.directory_id)
     ).all()
     return {directory_id: count for directory_id, count in rows if directory_id is not None}
+
+
+def _directory_tree_bookmarks(db: Session) -> tuple[dict[int, list[Bookmark]], list[Bookmark]]:
+    bookmarks = db.scalars(
+        select(Bookmark)
+        .options(selectinload(Bookmark.tags), selectinload(Bookmark.directory))
+        .where(Bookmark.deleted_at.is_(None))
+        .order_by(Bookmark.updated_at.desc())
+    ).unique().all()
+    by_directory: dict[int, list[Bookmark]] = {}
+    uncategorized: list[Bookmark] = []
+    for bookmark in bookmarks:
+        if bookmark.directory_id is None or bookmark.directory is None or _is_uncategorized_path(bookmark.directory.path):
+            uncategorized.append(bookmark)
+            continue
+        by_directory.setdefault(bookmark.directory_id, []).append(bookmark)
+    return by_directory, uncategorized
 
 
 def _bookmark_directory_from_path(db: Session, path: str) -> Directory | None:

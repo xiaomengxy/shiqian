@@ -37,7 +37,7 @@
       {% if item.tags or item.keywords %}
         <div class="quick-chips" aria-label="快速标签">
           {% for tag in item.tags[:2] %}
-            <a class="chip tag-chip" href="/bookmarks?tag={{ tag.name }}{% if directory_filter %}&directory={{ directory_filter }}{% endif %}" data-partial-link data-target="#bookmark-browser">#{{ tag.name }}</a>
+            <a class="chip tag-chip" href="/bookmarks?tag={{ tag.name|urlencode }}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}&tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">#{{ tag.name }}</a>
           {% endfor %}
           {% if item.tags|length > 2 %}
             <span class="chip muted-chip">+{{ item.tags|length - 2 }} 标签</span>
@@ -70,7 +70,7 @@
         {% if item.tags %}
           <div class="tags">
             {% for tag in item.tags %}
-              <a href="/bookmarks?tag={{ tag.name }}{% if directory_filter %}&directory={{ directory_filter }}{% endif %}" data-partial-link data-target="#bookmark-browser">{{ tag.name }}</a>
+              <a href="/bookmarks?tag={{ tag.name|urlencode }}{% if directory_filter %}&directory={{ directory_filter|urlencode }}{% endif %}&tree_view={{ tree_view }}" data-partial-link data-target="#bookmark-browser">{{ tag.name }}</a>
             {% endfor %}
           </div>
         {% endif %}

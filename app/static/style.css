@@ -1065,6 +1065,33 @@ summary {
   margin: 0;
 }
 
+.directory-view-switch {
+  background: rgba(244, 238, 222, 0.7);
+  border: 1px solid rgba(49, 95, 75, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+}
+
+.directory-view-switch a {
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 8px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.directory-view-switch a:hover,
+.directory-view-switch a.active {
+  background: rgba(255, 252, 244, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(49, 95, 75, 0.12), 0 2px 8px rgba(44, 38, 25, 0.05);
+  color: var(--accent-strong);
+}
+
 .library-results {
   display: grid;
   gap: 16px;
@@ -1187,6 +1214,87 @@ summary {
   border-left: 1px solid rgba(49, 95, 75, 0.12);
   margin-left: 16px;
   padding-left: 10px;
+}
+
+.directory-item-list {
+  display: grid;
+  gap: 5px;
+  list-style: none;
+  margin: 5px 0 7px 22px;
+  padding: 0;
+}
+
+.directory-item-row {
+  align-items: center;
+  background: rgba(255, 252, 244, 0.5);
+  border: 1px solid rgba(49, 95, 75, 0.08);
+  border-radius: 7px;
+  color: var(--ink);
+  display: grid;
+  gap: 5px;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  padding: 6px 7px;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+
+.directory-item-row:hover {
+  background: rgba(255, 248, 232, 0.9);
+  border-color: rgba(179, 146, 79, 0.22);
+  transform: translateX(1px);
+}
+
+.directory-item-row.is-dragging {
+  opacity: 0.48;
+}
+
+.directory-item-drag-handle {
+  color: rgba(49, 95, 75, 0.42);
+  cursor: grab;
+  display: grid;
+  gap: 2px;
+  grid-template-columns: repeat(2, 3px);
+  padding: 2px;
+}
+
+.directory-item-drag-handle span {
+  background: currentColor;
+  border-radius: 50%;
+  height: 3px;
+  width: 3px;
+}
+
+.directory-item-type {
+  background: rgba(49, 95, 75, 0.1);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 4px 6px;
+}
+
+.directory-item-title {
+  color: inherit;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.directory-item-title:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+.directory-item-tags {
+  color: var(--muted);
+  font-size: 11px;
+  grid-column: 3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tree-node {
