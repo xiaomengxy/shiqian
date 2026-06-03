@@ -1,64 +1,40 @@
 from pydantic import BaseModel, Field
 
 
-class ParseLinksRequest(BaseModel):
-    urls: list[str] = Field(min_length=1)
-    provider: str | None = None
-
-
-class ParseItemsRequest(BaseModel):
-    input: str = Field(min_length=1)
-    provider: str | None = None
-    grouping_mode: str = "smart"
-
-
-class ConfirmBookmarkRequest(BaseModel):
-    job_id: int
-    directory_path: str
-    tags: list[str]
-    keywords: list[str] = []
-    summary: str
-    name: str | None = None
-    title: str | None = None
-
-
-class UpdateBookmarkRequest(BaseModel):
-    name: str
-    summary: str
-    directory_path: str
-    tags: list[str] = []
-    keywords: list[str] = []
-    raw_input: str = ""
-    url: str | None = None
-
-
-class MoveBookmarkRequest(BaseModel):
+class CreateNoteRequest(BaseModel):
+    title: str = ""
+    body_md: str = ""
     directory_id: int | None = None
+    folder_path: str = ""
+    source_url: str | None = None
+    source_type: str = "manual"
+    source_id: str | None = None
+    source_meta: dict = Field(default_factory=dict)
 
 
-class SummaryRewriteRequest(BaseModel):
-    length: str = "normal"
-    style: str = "note"
-    current_summary: str = ""
-    provider: str | None = None
+class UpdateNoteRequest(BaseModel):
+    title: str = ""
+    body_md: str = ""
+    directory_id: int | None = None
+    folder_path: str = ""
+    source_url: str | None = None
+    source_type: str = "manual"
+    source_id: str | None = None
+    source_meta: dict = Field(default_factory=dict)
 
 
-class DirectoryCreateRequest(BaseModel):
-    path: str = Field(min_length=1)
-
-
-class DirectoryRenameRequest(BaseModel):
-    name: str = Field(min_length=1)
-
-
-class DirectoryMoveRequest(BaseModel):
+class CreateDirectoryRequest(BaseModel):
+    name: str
     parent_id: int | None = None
 
 
-class DirectoryChildRequest(BaseModel):
-    name: str = Field(min_length=1)
+class RenameDirectoryRequest(BaseModel):
+    name: str
 
 
-class DirectoryBulkDeleteRequest(BaseModel):
-    ids: list[int] = Field(min_length=1)
-    preview: bool = False
+class MoveDirectoryRequest(BaseModel):
+    parent_id: int | None = None
+
+
+class MoveNoteRequest(BaseModel):
+    directory_id: int | None = None

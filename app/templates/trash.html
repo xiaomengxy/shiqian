@@ -1,14 +1,35 @@
 {% extends "base.html" %}
 {% block title %}拾签 · 回收站{% endblock %}
 {% block content %}
-<section class="page-heading">
-  <div>
-    <div class="section-kicker">Trash</div>
-    <h1>回收站</h1>
-    <p>这里保存被移除的解析任务和收藏。恢复会回到原列表，永久删除不可撤销。</p>
-  </div>
-  <a class="button secondary" href="/bookmarks">返回资料库</a>
-</section>
+<section class="trash-page">
+  <header class="page-head">
+    <div>
+      <p class="eyebrow">Trash</p>
+      <h1>回收站</h1>
+      <p>删除的笔记会先留在这里，恢复后回到笔记列表。</p>
+    </div>
+    <a class="button secondary" href="/">返回笔记</a>
+  </header>
 
-{% include "_trash_lists.html" %}
+  <div class="trash-list" data-trash-list>
+    {% for note in notes %}
+      <article class="trash-item" data-trash-note="{{ note.id }}">
+        <div>
+          <h2>{{ note.title }}</h2>
+          <p>{{ note.body_md[:160] }}{% if note.body_md|length > 160 %}...{% endif %}</p>
+          <span>删除于 {{ note.deleted_at|local_datetime }}</span>
+        </div>
+        <div class="toolbar-actions">
+          <button class="secondary" type="button" data-restore-note="{{ note.id }}">恢复</button>
+          <button class="danger ghost" type="button" data-purge-note="{{ note.id }}">永久删除</button>
+        </div>
+      </article>
+    {% else %}
+      <section class="empty-panel compact">
+        <h2>回收站是空的</h2>
+        <p>暂时没有被删除的笔记。</p>
+      </section>
+    {% endfor %}
+  </div>
+</section>
 {% endblock %}

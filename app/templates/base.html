@@ -4,30 +4,28 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}拾签{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v=trash-polish">
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v=notes-pointer-drag2">
   </head>
   <body>
-    <div class="page-grain" aria-hidden="true"></div>
-    {% set current_path = request.url.path %}
+    {% set current = active_nav if active_nav is defined else "" %}
     <header class="topbar">
       <a class="brand" href="/">
         <span class="brand-mark">拾</span>
-        <span class="brand-copy">
+        <span>
           <strong>拾签</strong>
-          <small>Capture Library</small>
+          <small>Markdown Notes</small>
         </span>
       </a>
       <nav class="top-nav" aria-label="主导航">
-        <a class="nav-link {% if current_path.startswith('/bookmarks') %}active{% endif %}" href="/bookmarks" {% if current_path.startswith('/bookmarks') %}aria-current="page"{% endif %}>收藏</a>
-        <a class="nav-link {% if current_path.startswith('/jobs') or current_path.startswith('/review') %}active{% endif %}" href="/jobs" {% if current_path.startswith('/jobs') or current_path.startswith('/review') %}aria-current="page"{% endif %}>队列</a>
-        <a class="nav-link {% if current_path.startswith('/trash') %}active{% endif %}" href="/trash" {% if current_path.startswith('/trash') %}aria-current="page"{% endif %}>回收站</a>
-        <a class="nav-link {% if current_path.startswith('/settings') %}active{% endif %}" href="/settings" {% if current_path.startswith('/settings') %}aria-current="page"{% endif %}>设置</a>
-        <a class="nav-link nav-add {% if current_path == '/' or current_path.startswith('/grouping') %}active{% endif %}" href="/" {% if current_path == '/' or current_path.startswith('/grouping') %}aria-current="page"{% endif %}>+ 添加</a>
+        <a class="{% if current == 'notes' %}active{% endif %}" href="/">笔记</a>
+        <a class="{% if current == 'trash' %}active{% endif %}" href="/trash">回收站</a>
+        <a class="{% if current == 'settings' %}active{% endif %}" href="/settings">设置</a>
       </nav>
     </header>
-    <main class="shell">
+    <main>
       {% block content %}{% endblock %}
     </main>
-    <script src="{{ url_for('static', path='/app.js') }}?v=trash-polish" defer></script>
+    <script src="{{ url_for('static', path='/vendor/markdown-it.min.js') }}?v=notes-pointer-drag2"></script>
+    <script src="{{ url_for('static', path='/app.js') }}?v=notes-pointer-drag2" defer></script>
   </body>
 </html>

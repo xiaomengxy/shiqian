@@ -29,6 +29,7 @@ class Directory(Base):
     parent: Mapped["Directory | None"] = relationship(remote_side=[id], back_populates="children")
     children: Mapped[list["Directory"]] = relationship(back_populates="parent", cascade="all, delete-orphan")
     bookmarks: Mapped[list["Bookmark"]] = relationship(back_populates="directory")
+    notes: Mapped[list["Note"]] = relationship(back_populates="directory")
 
 
 class Bookmark(Base):
@@ -51,6 +52,7 @@ class Bookmark(Base):
     last_opened_at: Mapped[datetime | None] = mapped_column(DateTime)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
     parsed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    organized_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -58,6 +60,27 @@ class Bookmark(Base):
 
     directory: Mapped[Directory | None] = relationship(back_populates="bookmarks")
     tags: Mapped[list["Tag"]] = relationship(secondary=bookmark_tags, back_populates="bookmarks")
+
+
+class Note(Base):
+    __tablename__ = "notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="Untitled")
+    body_md: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    directory_id: Mapped[int | None] = mapped_column(ForeignKey("directories.id"))
+    folder_path: Mapped[str] = mapped_column(String(600), nullable=False, default="")
+    source_url: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False, default="manual")
+    source_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    source_meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    directory: Mapped[Directory | None] = relationship(back_populates="notes")
 
 
 class Tag(Base):

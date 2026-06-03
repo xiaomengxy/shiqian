@@ -21,6 +21,13 @@ def ensure_runtime_schema(engine: Engine) -> None:
             _ensure_parse_sessions(conn)
         if "app_config" not in tables:
             _ensure_app_config(conn)
+        if "directories" not in tables:
+            _ensure_directories(conn)
+        if "notes" not in tables:
+            _ensure_notes(conn)
+        else:
+            _ensure_notes_columns(conn)
+        _sync_note_directories_from_paths(conn)
 
 
 def _ensure_bookmarks(conn) -> None:
@@ -44,6 +51,9 @@ def _ensure_bookmarks(conn) -> None:
         if "parsed_at" not in column_names:
             conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN parsed_at DATETIME")
             conn.exec_driver_sql("UPDATE bookmarks SET parsed_at = created_at WHERE parsed_at IS NULL")
+        if "organized_at" not in column_names:
+            conn.exec_driver_sql("ALTER TABLE bookmarks ADD COLUMN organized_at DATETIME")
+            conn.exec_driver_sql("UPDATE bookmarks SET organized_at = COALESCE(updated_at, created_at)")
         return
 
     conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
@@ -67,6 +77,7 @@ def _ensure_bookmarks(conn) -> None:
             last_opened_at DATETIME,
             deleted_at DATETIME,
             parsed_at DATETIME,
+            organized_at DATETIME,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             FOREIGN KEY(directory_id) REFERENCES directories (id)
@@ -78,12 +89,12 @@ def _ensure_bookmarks(conn) -> None:
         INSERT INTO bookmarks_new (
             id, url, canonical_url, content_hash, source_type, raw_input, keywords,
             title, summary, content_type, source_domain, directory_id, status,
-            opened_count, last_opened_at, deleted_at, parsed_at, created_at, updated_at
+            opened_count, last_opened_at, deleted_at, parsed_at, organized_at, created_at, updated_at
         )
         SELECT
             id, url, canonical_url, NULL, 'url', COALESCE(url, ''), ?,
             title, summary, content_type, source_domain, directory_id, status,
-            0, NULL, NULL, created_at, created_at, updated_at
+            0, NULL, NULL, created_at, updated_at, created_at, updated_at
         FROM bookmarks
         """,
         (json.dumps([]),),
@@ -153,6 +164,109 @@ def _ensure_app_config(conn) -> None:
         )
         """
     )
+
+
+def _ensure_directories(conn) -> None:
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS directories (
+            id INTEGER NOT NULL PRIMARY KEY,
+            name VARCHAR(120) NOT NULL,
+            parent_id INTEGER,
+            path VARCHAR(600) NOT NULL UNIQUE,
+            depth INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            FOREIGN KEY(parent_id) REFERENCES directories (id)
+        )
+        """
+    )
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_directories_parent_id ON directories (parent_id)")
+
+
+def _ensure_notes(conn) -> None:
+    now = datetime.utcnow().isoformat(sep=" ")
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER NOT NULL PRIMARY KEY,
+            title VARCHAR(500) NOT NULL DEFAULT 'Untitled',
+            body_md TEXT NOT NULL DEFAULT '',
+            directory_id INTEGER,
+            folder_path VARCHAR(600) NOT NULL DEFAULT '',
+            source_url TEXT,
+            source_type VARCHAR(40) NOT NULL DEFAULT 'manual',
+            source_id VARCHAR(160),
+            source_meta JSON NOT NULL DEFAULT '{}',
+            deleted_at DATETIME,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            FOREIGN KEY(directory_id) REFERENCES directories (id)
+        )
+        """
+    )
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_notes_source_id ON notes (source_id)")
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_notes_directory_id ON notes (directory_id)")
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_notes_folder_path ON notes (folder_path)")
+
+
+def _ensure_notes_columns(conn) -> None:
+    columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(notes)").fetchall()}
+    if "directory_id" not in columns:
+        conn.exec_driver_sql("ALTER TABLE notes ADD COLUMN directory_id INTEGER")
+    if "folder_path" not in columns:
+        conn.exec_driver_sql("ALTER TABLE notes ADD COLUMN folder_path VARCHAR(600) NOT NULL DEFAULT ''")
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_notes_directory_id ON notes (directory_id)")
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_notes_folder_path ON notes (folder_path)")
+
+
+def _sync_note_directories_from_paths(conn) -> None:
+    if "notes" not in set(inspect(conn).get_table_names()):
+        return
+    columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(notes)").fetchall()}
+    if "directory_id" not in columns or "folder_path" not in columns:
+        return
+    rows = conn.exec_driver_sql(
+        "SELECT id, folder_path FROM notes WHERE directory_id IS NULL AND COALESCE(folder_path, '') != ''"
+    ).fetchall()
+    for note_id, folder_path in rows:
+        directory_id = _ensure_directory_path(conn, folder_path)
+        if directory_id:
+            conn.exec_driver_sql("UPDATE notes SET directory_id = ? WHERE id = ?", (directory_id, note_id))
+
+
+def _ensure_directory_path(conn, path: str | None) -> int | None:
+    parts = _clean_directory_parts(path)
+    if not parts:
+        return None
+    parent_id = None
+    current_path_parts: list[str] = []
+    directory_id = None
+    now = datetime.utcnow().isoformat(sep=" ")
+    for depth, name in enumerate(parts):
+        current_path_parts.append(name)
+        current_path = "/".join(current_path_parts)
+        row = conn.exec_driver_sql("SELECT id FROM directories WHERE path = ?", (current_path,)).fetchone()
+        if row is None:
+            conn.exec_driver_sql(
+                """
+                INSERT INTO directories (name, parent_id, path, depth, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (name, parent_id, current_path, depth, now),
+            )
+            row = conn.exec_driver_sql("SELECT id FROM directories WHERE path = ?", (current_path,)).fetchone()
+        directory_id = row[0]
+        parent_id = directory_id
+    return directory_id
+
+
+def _clean_directory_parts(path: str | None) -> list[str]:
+    parts = []
+    for raw in (path or "").replace("\\", "/").split("/"):
+        clean = " ".join(raw.replace("\x00", "").split())[:80]
+        if clean and clean != "未分类":
+            parts.append(clean)
+    return parts
 
 
 def _ensure_parse_sessions(conn) -> None:

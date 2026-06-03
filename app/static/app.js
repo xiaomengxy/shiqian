@@ -1,943 +1,744 @@
 (() => {
-  const partialMap = {
-    "/bookmarks": { partial: "/bookmarks/partials", target: "#bookmark-browser" },
-    "/trash": { partial: "/trash/partials", target: "#trash-lists" },
-    "/jobs": { partial: "/jobs/partials", target: "#jobs-list" },
-  };
-  let autoRefreshTimer = null;
-  let liveFilterTimer = null;
-  let liveFilterController = null;
-  let draggedDirectoryId = null;
-  let draggedBookmarkId = null;
-  const directoryViewKey = "shiqian.directoryViewMode";
-  const directoryViewModes = new Set(["structure", "items"]);
-  const collapsedDirectoryItemsKey = "shiqian.collapsedDirectoryItems";
+  const app = document.querySelector("[data-notes-app]");
+  const trashList = document.querySelector("[data-trash-list]");
+  const md = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
+  const collapsedKey = "shiqian.notes.collapsedDirectories";
 
-  function asUrl(value) {
-    return new URL(value, window.location.origin);
-  }
-
-  function partialUrlFrom(urlLike) {
-    const url = asUrl(urlLike);
-    const mapped = partialMap[url.pathname];
-    if (!mapped) return null;
-    return `${mapped.partial}${url.search}`;
-  }
-
-  function targetForUrl(urlLike) {
-    const url = asUrl(urlLike);
-    return partialMap[url.pathname]?.target || null;
-  }
-
-  function validDirectoryViewMode(value) {
-    return directoryViewModes.has(value) ? value : null;
-  }
-
-  function storedDirectoryViewMode() {
+  function parseJson(id, fallback) {
+    const node = document.querySelector(`#${id}`);
+    if (!node) return fallback;
     try {
-      return validDirectoryViewMode(window.localStorage.getItem(directoryViewKey));
+      return JSON.parse(node.textContent || "");
     } catch {
-      return null;
+      return fallback;
     }
   }
 
-  function setStoredDirectoryViewMode(mode) {
-    const cleanMode = validDirectoryViewMode(mode);
-    if (!cleanMode) return;
-    try {
-      window.localStorage.setItem(directoryViewKey, cleanMode);
-    } catch {
-      // Browser storage can be unavailable in private or restricted contexts.
-    }
-  }
+  let notes = parseJson("notes-data", []);
+  let tree = parseJson("tree-data", { root_notes: [], directories: [], total_count: notes.length, visible_count: notes.length });
+  let directories = parseJson("directories-data", []);
+  let selectedId = notes[0]?.id || null;
+  let selectedDirectoryId = notes[0]?.directory_id || "";
+  let editingId = null;
+  let dragged = null;
+  let pointerDrag = null;
+  let activeDropTarget = null;
+  let suppressClickUntil = 0;
+  let contextMenu = null;
+  let dialog = null;
+  let cancelDialog = null;
 
-  function storedCollapsedDirectoryItems() {
+  function collapsedDirectories() {
     try {
-      const value = JSON.parse(window.localStorage.getItem(collapsedDirectoryItemsKey) || "[]");
-      if (!Array.isArray(value)) return new Set();
-      return new Set(value.map(String));
+      return new Set(JSON.parse(localStorage.getItem(collapsedKey) || "[]").map(String));
     } catch {
       return new Set();
     }
   }
 
-  function setStoredCollapsedDirectoryItems(keys) {
+  function saveCollapsedDirectories(values) {
     try {
-      window.localStorage.setItem(collapsedDirectoryItemsKey, JSON.stringify(Array.from(keys)));
+      localStorage.setItem(collapsedKey, JSON.stringify(Array.from(values)));
     } catch {
-      // Browser storage can be unavailable in private or restricted contexts.
+      // Local storage can be unavailable in restricted browser contexts.
     }
   }
 
-  function setDirectoryItemsCollapsed(branch, collapsed) {
-    if (!branch) return;
-    const button = branch.querySelector("[data-directory-items-toggle]");
-    const contentLists = Array.from(branch.children).filter((child) =>
-      child.matches?.("[data-directory-items-list], [data-directory-children-list]")
-    );
-    const targetSelector = button?.dataset.directoryItemsTarget;
-    const externalTarget = targetSelector ? document.querySelector(targetSelector) : null;
-    branch.classList.toggle("is-items-collapsed", collapsed);
-    contentLists.forEach((list) => {
-      list.hidden = collapsed;
-    });
-    if (externalTarget) externalTarget.hidden = collapsed;
-    if (button) {
-      button.setAttribute("aria-expanded", String(!collapsed));
-      button.title = collapsed ? "展开内容" : "折叠内容";
-    }
+  function byId(id) {
+    return notes.find((note) => Number(note.id) === Number(id)) || null;
   }
 
-  function restoreCollapsedDirectoryItems(root = document) {
-    const collapsedKeys = storedCollapsedDirectoryItems();
-    root.querySelectorAll("[data-directory-item-branch]").forEach((branch) => {
-      const key = branch.dataset.directoryItemsKey;
-      if (!key) return;
-      setDirectoryItemsCollapsed(branch, collapsedKeys.has(key));
-    });
+  function escapeHtml(value) {
+    return String(value || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
   }
 
-  function toggleDirectoryItems(button) {
-    const branch = button.closest("[data-directory-item-branch]");
-    const key = button.dataset.directoryItemsKey || branch?.dataset.directoryItemsKey;
-    if (!branch || !key) return;
-    const collapsedKeys = storedCollapsedDirectoryItems();
-    const shouldCollapse = !branch.classList.contains("is-items-collapsed");
-    if (shouldCollapse) {
-      collapsedKeys.add(String(key));
-    } else {
-      collapsedKeys.delete(String(key));
-    }
-    setStoredCollapsedDirectoryItems(collapsedKeys);
-    setDirectoryItemsCollapsed(branch, shouldCollapse);
+  function renderMarkdown(text) {
+    if (md) return md.render(text || "");
+    return `<p>${escapeHtml(text || "").replace(/\n/g, "<br>")}</p>`;
   }
 
-  function directoryViewFromUrl(urlLike) {
-    return validDirectoryViewMode(asUrl(urlLike).searchParams.get("tree_view"));
+  function sourceTypeFor(url) {
+    return String(url || "").trim() ? "url" : "manual";
   }
 
-  function currentDirectoryViewMode() {
-    return directoryViewFromUrl(window.location.href) || storedDirectoryViewMode() || "structure";
+  function noteMeta(note) {
+    return note.source_url || note.updated_at_display || "未分类";
   }
 
-  function urlWithDirectoryView(urlLike, mode = currentDirectoryViewMode()) {
-    const url = asUrl(urlLike);
-    if (url.pathname !== "/bookmarks") return urlLike;
-    const cleanMode = validDirectoryViewMode(mode) || "structure";
-    url.searchParams.set("tree_view", cleanMode);
-    return `${url.pathname}${url.search}`;
-  }
-
-  function captureFocus(target) {
-    const active = document.activeElement;
-    if (!active || !target.contains(active) || !active.name) return null;
-    return {
-      name: active.name,
-      selectionStart: active.selectionStart,
-      selectionEnd: active.selectionEnd,
-    };
-  }
-
-  function restoreFocus(state) {
-    if (!state) return;
-    const form = document.querySelector("[data-filter-form]");
-    const element = form?.elements?.[state.name];
-    if (!element || typeof element.focus !== "function") return;
-    element.focus();
-    if (
-      typeof element.setSelectionRange === "function" &&
-      Number.isInteger(state.selectionStart) &&
-      Number.isInteger(state.selectionEnd)
-    ) {
-      element.setSelectionRange(state.selectionStart, state.selectionEnd);
-    }
-  }
-
-  function captureScrollState(target) {
-    const selectors = [".library-sidebar", ".library-results"];
-    return {
-      windowX: window.scrollX,
-      windowY: window.scrollY,
-      elements: selectors.map((selector) => {
-        const element = target.querySelector(selector);
-        return {
-          selector,
-          scrollLeft: element?.scrollLeft || 0,
-          scrollTop: element?.scrollTop || 0,
-        };
-      }),
-    };
-  }
-
-  function restoreScrollState(state) {
-    if (!state) return;
-    window.scrollTo(state.windowX, state.windowY);
-    state.elements.forEach((entry) => {
-      const element = document.querySelector(entry.selector);
-      if (!element) return;
-      element.scrollLeft = entry.scrollLeft;
-      element.scrollTop = entry.scrollTop;
-    });
-    window.requestAnimationFrame(() => {
-      window.scrollTo(state.windowX, state.windowY);
-    });
-  }
-
-  async function replaceFragment(targetSelector, partialUrl, nextUrl, options = {}) {
-    const target = document.querySelector(targetSelector);
-    if (!target || !partialUrl) return;
-    const focusState = options.preserveFocus ? captureFocus(target) : null;
-    const scrollState = options.preserveScroll ? captureScrollState(target) : null;
-    target.classList.add("is-loading");
-    try {
-      const response = await fetch(partialUrl, {
-        headers: { "X-Requested-With": "fetch" },
-        signal: options.signal,
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const html = await response.text();
-      target.outerHTML = html;
-      setupAutoRefresh();
-      restoreCollapsedDirectoryItems();
-      restoreFocus(focusState);
-      restoreScrollState(scrollState);
-      if (nextUrl) {
-        const historyState = { target: targetSelector };
-        const viewMode = directoryViewFromUrl(nextUrl);
-        if (viewMode) setStoredDirectoryViewMode(viewMode);
-        if (options.history === "replace") {
-          window.history.replaceState(historyState, "", nextUrl);
-        } else {
-          window.history.pushState(historyState, "", nextUrl);
-        }
-      }
-    } finally {
-      if (target.isConnected) {
-        target.classList.remove("is-loading");
-      }
-    }
-  }
-
-  function abortLiveFilter() {
-    if (liveFilterController) {
-      liveFilterController.abort();
-      liveFilterController = null;
-    }
-  }
-
-  async function runLiveFilter(form) {
-    abortLiveFilter();
-    const controller = new AbortController();
-    liveFilterController = controller;
-    try {
-      await handleFilterForm(form, {
-        history: "replace",
-        preserveFocus: true,
-        signal: controller.signal,
-      });
-    } catch (error) {
-      if (error.name !== "AbortError") {
-        toast(messageFromError(error));
-      }
-    } finally {
-      if (liveFilterController === controller) {
-        liveFilterController = null;
-      }
-    }
-  }
-
-  function scheduleLiveFilter(form, delay = 300) {
-    window.clearTimeout(liveFilterTimer);
-    abortLiveFilter();
-    liveFilterTimer = window.setTimeout(() => {
-      if (form.isConnected) {
-        runLiveFilter(form);
-      } else {
-        const nextForm = document.querySelector("[data-filter-form]");
-        if (nextForm) runLiveFilter(nextForm);
-      }
-    }, delay);
-  }
-
-  function toast(message) {
-    let node = document.querySelector(".toast");
-    if (!node) {
-      node = document.createElement("div");
-      node.className = "toast";
-      document.body.appendChild(node);
-    }
-    node.textContent = message;
-    node.classList.add("show");
-    window.clearTimeout(node.dataset.timer);
-    node.dataset.timer = window.setTimeout(() => node.classList.remove("show"), 1600);
-  }
-
-  function messageFromError(error) {
-    if (!error) return "操作失败";
-    return String(error.message || error).slice(0, 160);
-  }
-
-  function setBusy(form, busy) {
-    form.querySelectorAll("button, input, select, textarea").forEach((element) => {
-      if (busy) {
-        element.dataset.wasDisabled = element.disabled ? "1" : "0";
-        element.disabled = true;
-      } else if (element.dataset.wasDisabled !== "1") {
-        element.disabled = false;
-      }
-    });
-  }
-
-  async function handlePartialLink(link) {
-    const requestedView = validDirectoryViewMode(link.dataset.directoryView);
-    const href = urlWithDirectoryView(link.getAttribute("href"), requestedView || currentDirectoryViewMode());
-    if (requestedView) setStoredDirectoryViewMode(requestedView);
-    const partialUrl = partialUrlFrom(href);
-    const target = link.dataset.target || targetForUrl(href);
-    if (!partialUrl || !target) return false;
-    await replaceFragment(target, partialUrl, href, {
-      preserveScroll: link.dataset.preserveScroll === "true",
-    });
-    return true;
-  }
-
-  function filterUrlFromForm(form) {
-    const params = new URLSearchParams();
-    new FormData(form).forEach((value, key) => {
-      if (!String(value).trim()) return;
-      if (key === "tag") {
-        params.append(key, value);
-      } else {
-        params.set(key, value);
-      }
-    });
-    const path = form.getAttribute("action") || window.location.pathname;
-    if (path === "/bookmarks" && !params.has("tree_view")) {
-      params.set("tree_view", currentDirectoryViewMode());
-    }
-    return `${path}${params.toString() ? `?${params.toString()}` : ""}`;
-  }
-
-  async function handleFilterForm(form, options = {}) {
-    const url = filterUrlFromForm(form);
-    await replaceFragment(form.dataset.target || targetForUrl(url), partialUrlFrom(url), url, options);
-  }
-
-  async function handleAsyncForm(form) {
-    const confirmed = form.dataset.confirm ? window.confirm(form.dataset.confirm) : true;
-    if (!confirmed) return;
-    setBusy(form, true);
-    try {
-      const response = await fetch(form.action, {
-        method: (form.method || "POST").toUpperCase(),
-        body: new FormData(form),
-        headers: { "X-Requested-With": "fetch" },
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const finalUrl = response.url || window.location.href;
-      const target = form.dataset.target || targetForUrl(finalUrl);
-      await replaceFragment(target, partialUrlFrom(finalUrl), finalUrl);
-      toast("已更新");
-    } finally {
-      setBusy(form, false);
-    }
-  }
-
-  async function handleApiForm(form) {
-    const confirmed = form.dataset.confirm ? window.confirm(form.dataset.confirm) : true;
-    if (!confirmed) return;
-    setBusy(form, true);
-    try {
-      const response = await fetch(form.dataset.apiAction, {
-        method: form.dataset.apiMethod || "POST",
-        headers: { "X-Requested-With": "fetch" },
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const target = form.dataset.refreshFragment;
-      if (target) {
-        const partialUrl = partialUrlFrom(window.location.href) || partialUrlFrom(target === "#jobs-list" ? "/jobs" : "/trash");
-        await replaceFragment(target, partialUrl, null);
-      } else {
-        form.closest("[data-card]")?.remove();
-      }
-      toast("已完成");
-    } finally {
-      setBusy(form, false);
-    }
-  }
-
-  async function handleDirectoryForm(form) {
-    setBusy(form, true);
-    try {
-      const payload = {};
-      new FormData(form).forEach((value, key) => {
-        const text = String(value).trim();
-        if (key === "parent_id") {
-          payload[key] = text ? Number(text) : null;
-        } else {
-          payload[key] = text;
-        }
-      });
-      const response = await fetch(form.dataset.directoryAction, {
-        method: form.dataset.directoryMethod || "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Requested-With": "fetch",
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const data = await response.json();
-      await refreshBookmarksForDirectory(data.path);
-      toast("目录已更新");
-    } finally {
-      setBusy(form, false);
-    }
-  }
-
-  function directoryImpactMessage(preview, title = "删除目录") {
-    const paths = (preview.paths || []).join("、");
-    return `${title}：${paths}\n\n将删除 ${preview.directory_count || 0} 个目录（含 ${preview.children_count || 0} 个子目录），${preview.bookmark_count || 0} 条收藏会移到未分类。\n\n收藏内容、标签和关键词不会被删除。确认继续？`;
-  }
-
-  async function fetchJson(url, options = {}) {
+  async function requestJson(url, options = {}) {
     const response = await fetch(url, {
+      ...options,
       headers: {
         "Content-Type": "application/json",
-        "X-Requested-With": "fetch",
         ...(options.headers || {}),
       },
-      ...options,
     });
     if (!response.ok) throw new Error(await response.text());
     return response.json();
   }
 
-  function toggleDirectoryInline(button) {
-    const branch = button.closest("[data-directory-branch]");
-    if (!branch) return;
-    const mode = button.dataset.directoryToggle;
-    Array.from(branch.children)
-      .filter((child) => child.matches?.("[data-directory-inline]"))
-      .forEach((form) => {
-        const shouldOpen = form.dataset.directoryInline === mode && form.hidden;
-        form.hidden = !shouldOpen;
-        if (shouldOpen) form.querySelector("input")?.focus();
-      });
+  async function reloadNotes(query = app?.querySelector("[data-note-search]")?.value || "") {
+    const url = new URL("/api/notes", window.location.origin);
+    if (query) url.searchParams.set("query", query);
+    const data = await requestJson(url.pathname + url.search);
+    notes = data.notes || [];
+    tree = data.tree || tree;
+    directories = data.directories || data.folders || directories;
+    if (!notes.some((note) => note.id === selectedId)) selectedId = notes[0]?.id || null;
+    render();
   }
 
-  function toggleRootDirectoryForm(button) {
-    const zone = button.closest("[data-directory-drop]");
-    const form = zone?.querySelector("[data-root-directory-form]");
-    if (!form) return;
-    form.hidden = !form.hidden;
-    if (!form.hidden) form.querySelector("input")?.focus();
+  function noteRow(note, depth) {
+    return `
+      <div class="tree-note ${note.id === selectedId ? "active" : ""}" role="button" tabindex="0"
+        data-note-draggable data-note-id="${note.id}" data-select-note="${note.id}" style="--depth:${depth}">
+        <span class="tree-note-text">
+          <strong>${escapeHtml(note.title)}</strong>
+          <small>${escapeHtml(noteMeta(note))}</small>
+        </span>
+      </div>
+    `;
   }
 
-  function bookmarkBrowserFrom(node) {
-    return node?.closest?.("#bookmark-browser") || document.querySelector("#bookmark-browser");
+  function directoryNode(node, depth = 0) {
+    const collapsed = collapsedDirectories().has(String(node.id));
+    const children = [...(node.notes || []).map((note) => noteRow(note, depth + 1)), ...(node.children || []).map((child) => directoryNode(child, depth + 1))];
+    const hasChildren = children.length > 0;
+    return `
+      <section class="tree-branch ${collapsed ? "collapsed" : ""} ${hasChildren ? "" : "empty"}" data-directory-branch="${node.id}">
+        <div class="tree-directory ${String(selectedDirectoryId) === String(node.id) ? "active" : ""}"
+          data-directory-draggable data-directory-drop data-directory-id="${node.id}" style="--depth:${depth}">
+          <button class="tree-toggle" type="button" data-toggle-directory="${node.id}" aria-label="展开或折叠目录" ${hasChildren ? "" : "disabled"}></button>
+          <span class="tree-folder" data-select-directory="${node.id}">
+            <span>${escapeHtml(node.name)}</span>
+            <small>${node.count}</small>
+          </span>
+        </div>
+        <div class="tree-children">${children.join("")}</div>
+      </section>
+    `;
   }
 
-  function isDirectoryManageMode(node) {
-    return Boolean(bookmarkBrowserFrom(node)?.classList.contains("directory-manage-mode"));
+  function renderTree() {
+    const rootCount = app.querySelector("[data-root-count]");
+    if (rootCount) rootCount.textContent = `${tree.root_notes?.length || 0}`;
+    const treeNode = app.querySelector("[data-note-tree]");
+    if (!treeNode) return;
+    const rootNotes = (tree.root_notes || []).map((note) => noteRow(note, 0));
+    const branches = (tree.directories || []).map((node) => directoryNode(node, 0));
+    const html = [...rootNotes, ...branches].join("");
+    treeNode.innerHTML = html || `<div class="tree-empty">没有笔记</div>`;
   }
 
-  function setDirectoryManageMode(browser, active) {
-    if (!browser) return;
-    browser.classList.toggle("directory-manage-mode", active);
-    if (active) return;
-    browser.classList.remove("directory-bulk-mode");
-    browser.querySelectorAll("[data-directory-inline], [data-root-directory-form]").forEach((form) => {
-      form.hidden = true;
-    });
-    browser.querySelectorAll("[data-directory-select]").forEach((input) => {
-      input.checked = false;
-    });
-    browser.querySelectorAll("[data-directory-bulk-toggle]").forEach((button) => {
-      button.textContent = "批量";
-    });
-    browser.querySelectorAll("[data-directory-bulk-delete]").forEach((button) => {
-      button.hidden = true;
-    });
-  }
-
-  async function deleteDirectory(button) {
-    const id = button.dataset.directoryId;
-    const preview = await fetchJson(`/api/directories/${id}/delete-preview`);
-    if (!window.confirm(directoryImpactMessage(preview))) return;
-    const result = await fetchJson(`/api/directories/${id}`, { method: "DELETE" });
-    await refreshBookmarksForDirectory(result.redirect_directory || "__none__");
-    toast("目录已删除，收藏已移到未分类");
-  }
-
-  function toggleDirectoryBulkMode(button) {
-    const browser = document.querySelector("#bookmark-browser");
-    if (!browser) return;
-    const active = !browser.classList.contains("directory-bulk-mode");
-    browser.classList.toggle("directory-bulk-mode", active);
-    button.textContent = active ? "退出批量" : "批量";
-    const deleteButton = browser.querySelector("[data-directory-bulk-delete]");
-    if (deleteButton) deleteButton.hidden = !active;
-    if (!active) {
-      browser.querySelectorAll("[data-directory-select]").forEach((input) => {
-        input.checked = false;
-      });
-    }
-  }
-
-  async function bulkDeleteDirectories(button) {
-    const browser = button.closest("#bookmark-browser") || document;
-    const ids = Array.from(browser.querySelectorAll("[data-directory-select]:checked")).map((input) =>
-      Number(input.value)
-    );
-    if (!ids.length) {
-      toast("先选择要删除的目录");
+  function renderReader(note) {
+    const empty = app.querySelector("[data-empty-panel]");
+    const reader = app.querySelector("[data-reader-panel]");
+    const editor = app.querySelector("[data-editor-panel]");
+    if (!note) {
+      empty.hidden = false;
+      reader.hidden = true;
+      editor.hidden = true;
       return;
     }
-    const preview = await fetchJson("/api/directories/bulk-delete", {
-      method: "POST",
-      body: JSON.stringify({ ids, preview: true }),
-    });
-    if (!window.confirm(directoryImpactMessage(preview, "批量删除目录"))) return;
-    const result = await fetchJson("/api/directories/bulk-delete", {
-      method: "POST",
-      body: JSON.stringify({ ids }),
-    });
-    await refreshBookmarksForDirectory(result.redirect_directory || "__none__");
-    toast("目录已批量删除，收藏已移到未分类");
-  }
-
-  async function moveDraggedDirectory(parentId) {
-    if (!draggedDirectoryId) return;
-    if (String(parentId || "") === String(draggedDirectoryId)) return;
-    const response = await fetch(`/api/directories/${draggedDirectoryId}/move`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Requested-With": "fetch",
-      },
-      body: JSON.stringify({ parent_id: parentId ? Number(parentId) : null }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    const data = await response.json();
-    await refreshBookmarksForDirectory(data.path);
-    toast("目录已移动");
-  }
-
-  async function moveDraggedBookmark(directoryId) {
-    if (!draggedBookmarkId) return;
-    const response = await fetch(`/api/bookmarks/${draggedBookmarkId}/move`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Requested-With": "fetch",
-      },
-      body: JSON.stringify({ directory_id: directoryId ? Number(directoryId) : null }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    const data = await response.json();
-    await replaceFragment("#bookmark-browser", partialUrlFrom(window.location.href), window.location.href, {
-      history: "replace",
-    });
-    toast(`已移动到 ${data.directory || "未分类"}`);
-  }
-
-  async function refreshBookmarksForDirectory(path) {
-    const nextUrl = `/bookmarks?directory=${encodeURIComponent(path)}&tree_view=${currentDirectoryViewMode()}`;
-    await replaceFragment("#bookmark-browser", partialUrlFrom(nextUrl), nextUrl);
-  }
-
-  async function copyLink(button) {
-    const url = button.dataset.url;
-    try {
-      await navigator.clipboard.writeText(url);
-      toast("链接已复制");
-    } catch {
-      window.prompt("复制链接", url);
+    empty.hidden = true;
+    editor.hidden = true;
+    reader.hidden = false;
+    reader.querySelector("[data-note-title]").textContent = note.title;
+    reader.querySelector("[data-note-rendered]").innerHTML = renderMarkdown(note.body_md);
+    reader.querySelector("[data-note-updated]").textContent = `更新于 ${note.updated_at_display || ""}`;
+    reader.querySelector("[data-note-source-label]").textContent = `${note.folder_path || "未分类"} · ${note.source_type || "manual"}`;
+    const source = reader.querySelector("[data-note-source]");
+    if (note.source_url) {
+      source.hidden = false;
+      source.href = note.source_url;
+      source.textContent = note.source_url;
+    } else {
+      source.hidden = true;
+      source.removeAttribute("href");
+      source.textContent = "";
     }
   }
 
-  async function rewriteSummary(button) {
-    const box = button.closest("[data-summary-tools]");
-    const summary = document.querySelector('textarea[name="summary"]');
-    if (!box || !summary) return;
-    const status = box.querySelector("[data-summary-status]");
-    button.disabled = true;
-    if (status) status.textContent = "正在重写...";
-    try {
-      const response = await fetch(`/api/jobs/${box.dataset.jobId}/summary/rewrite`, {
+  function renderEditor(note = null) {
+    const empty = app.querySelector("[data-empty-panel]");
+    const reader = app.querySelector("[data-reader-panel]");
+    const editor = app.querySelector("[data-editor-panel]");
+    const form = app.querySelector("[data-note-form]");
+    editingId = note?.id || null;
+    empty.hidden = true;
+    reader.hidden = true;
+    editor.hidden = false;
+    form.elements.title.value = note?.title || "";
+    form.elements.source_url.value = note?.source_url || "";
+    form.elements.body_md.value = note?.body_md || "";
+    form.elements.title.focus();
+  }
+
+  function render() {
+    if (!app) return;
+    renderTree();
+    if (editingId !== null) return;
+    renderReader(byId(selectedId));
+  }
+
+  async function saveCurrent(form) {
+    const currentNote = editingId ? byId(editingId) : null;
+    const directoryId = currentNote ? currentNote.directory_id : selectedDirectoryId;
+    const payload = {
+      title: form.elements.title.value,
+      body_md: form.elements.body_md.value,
+      directory_id: directoryId ? Number(directoryId) : null,
+      folder_path: "",
+      source_url: form.elements.source_url.value || null,
+      source_type: sourceTypeFor(form.elements.source_url.value),
+      source_id: null,
+      source_meta: {},
+    };
+    const url = editingId ? `/api/notes/${editingId}` : "/api/notes";
+    const method = editingId ? "PUT" : "POST";
+    const data = await requestJson(url, { method, body: JSON.stringify(payload) });
+    selectedId = data.note.id;
+    selectedDirectoryId = data.note.directory_id || "";
+    editingId = null;
+    await reloadNotes();
+  }
+
+  async function deleteSelected() {
+    if (!selectedId) return;
+    const confirmed = await modalConfirm("删除笔记", "把这条笔记移入回收站？", "删除");
+    if (!confirmed) return;
+    await requestJson(`/api/notes/${selectedId}`, { method: "DELETE" });
+    await reloadNotes();
+  }
+
+  async function createDirectory(parentId = null) {
+    const name = await modalInput("新建目录", "目录名称", "");
+    if (!name || !name.trim()) return;
+    const data = await requestJson("/api/directories", {
+      method: "POST",
+      body: JSON.stringify({ name, parent_id: parentId ? Number(parentId) : null }),
+    });
+    tree = data.tree || tree;
+    directories = data.directories || directories;
+    selectedDirectoryId = data.directory?.id || selectedDirectoryId;
+    render();
+  }
+
+  async function renameDirectory(id, currentName) {
+    const name = await modalInput("重命名目录", "新的目录名称", currentName || "");
+    if (!name || !name.trim() || name === currentName) return;
+    const data = await requestJson(`/api/directories/${id}`, { method: "PUT", body: JSON.stringify({ name }) });
+    tree = data.tree || tree;
+    directories = data.directories || directories;
+    await reloadNotes();
+  }
+
+  async function deleteDirectory(id, name) {
+    const confirmed = await modalConfirm("删除目录", `删除目录“${name}”？\n\n目录下的笔记会移到未分类，不会被删除。`, "删除");
+    if (!confirmed) return;
+    const data = await requestJson(`/api/directories/${id}`, { method: "DELETE" });
+    tree = data.tree || tree;
+    directories = data.directories || directories;
+    selectedDirectoryId = "";
+    await reloadNotes();
+  }
+
+  async function moveDraggedTo(directoryId) {
+    if (!dragged) return;
+    const targetId = directoryId ? Number(directoryId) : null;
+    if (dragged.type === "note") {
+      const data = await requestJson(`/api/notes/${dragged.id}/move`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Requested-With": "fetch",
-        },
-        body: JSON.stringify({
-          length: box.querySelector("[data-summary-length]")?.value || "normal",
-          style: box.querySelector("[data-summary-style]")?.value || "note",
-          current_summary: summary.value,
-        }),
+        body: JSON.stringify({ directory_id: targetId }),
       });
-      if (!response.ok) throw new Error(await response.text());
-      const data = await response.json();
-      summary.value = data.summary || summary.value;
-      if (status) status.textContent = data.error ? "已用本地规则改写" : "已重写";
-      toast("简介已重写");
-    } finally {
-      button.disabled = false;
+      selectedId = data.note.id;
+      selectedDirectoryId = data.note.directory_id || "";
+      await reloadNotes();
+      return;
+    }
+    if (dragged.type === "directory") {
+      if (String(targetId || "") === String(dragged.id)) return;
+      await requestJson(`/api/directories/${dragged.id}/move`, {
+        method: "POST",
+        body: JSON.stringify({ parent_id: targetId }),
+      });
+      selectedDirectoryId = dragged.id;
+      await reloadNotes();
     }
   }
 
-  function applySummaryPreset(button) {
-    const box = button.closest("[data-summary-tools]");
-    if (!box) return;
-    const length = box.querySelector("[data-summary-length]");
-    const style = box.querySelector("[data-summary-style]");
-    if (length && button.dataset.length) length.value = button.dataset.length;
-    if (style && button.dataset.style) style.value = button.dataset.style;
-    box.querySelector("[data-summary-rewrite]")?.click();
+  function isDirectoryDescendantTarget(sourceId, target) {
+    const sourceBranch = app.querySelector(`[data-directory-branch="${CSS.escape(String(sourceId))}"]`);
+    const targetBranch = target.closest("[data-directory-branch]");
+    return Boolean(sourceBranch && targetBranch && sourceBranch !== targetBranch && sourceBranch.contains(targetBranch));
   }
 
-  function appendToken(button) {
-    const input = document.querySelector(`[name="${button.dataset.appendToken}"]`);
-    if (!input) return;
-    const nextToken = (button.dataset.token || "").trim();
-    if (!nextToken) return;
-    const tokens = input.value
-      .split(",")
-      .map((token) => token.trim())
-      .filter(Boolean);
-    if (!tokens.includes(nextToken)) {
-      tokens.push(nextToken);
-    }
-    input.value = tokens.join(", ");
-    input.focus();
+  function clearDropTarget() {
+    activeDropTarget?.classList.remove("is-drop-target");
+    activeDropTarget = null;
   }
 
-  function fillNamedInput(button) {
-    const input = document.querySelector(`[name="${button.dataset.fillInput}"]`);
-    if (!input) return;
-    input.value = button.dataset.value || "";
-    input.focus();
+  function validDropTargetFor(dragState, target) {
+    if (!target || !dragState) return false;
+    if (dragState.type === "directory" && String(target.dataset.directoryId || "") === String(dragState.id)) return false;
+    if (dragState.type === "directory" && isDirectoryDescendantTarget(dragState.id, target)) return false;
+    return true;
   }
 
-  document.addEventListener("click", async (event) => {
-    const summaryPreset = event.target.closest("[data-summary-preset]");
-    if (summaryPreset) {
+  function updatePointerDropTarget(event) {
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    const target = element?.closest?.("[data-directory-drop]");
+    const nextTarget = validDropTargetFor(pointerDrag?.dragged, target) ? target : null;
+    if (activeDropTarget === nextTarget) return;
+    clearDropTarget();
+    activeDropTarget = nextTarget;
+    activeDropTarget?.classList.add("is-drop-target");
+  }
+
+  function finishPointerDrag() {
+    pointerDrag?.node?.classList.remove("is-dragging");
+    document.body.classList.remove("is-tree-dragging");
+    clearDropTarget();
+    pointerDrag = null;
+  }
+
+  async function restoreNote(id) {
+    await requestJson(`/api/notes/${id}/restore`, { method: "POST" });
+    document.querySelector(`[data-trash-note="${CSS.escape(String(id))}"]`)?.remove();
+    refreshTrashEmptyState();
+  }
+
+  async function purgeNote(id) {
+    const confirmed = await modalConfirm("永久删除", "永久删除后无法恢复，确认继续？", "永久删除");
+    if (!confirmed) return;
+    await requestJson(`/api/notes/${id}/purge`, { method: "DELETE" });
+    document.querySelector(`[data-trash-note="${CSS.escape(String(id))}"]`)?.remove();
+    refreshTrashEmptyState();
+  }
+
+  function closeContextMenu() {
+    contextMenu?.remove();
+    contextMenu = null;
+  }
+
+  function openContextMenu(x, y, items) {
+    closeContextMenu();
+    contextMenu = document.createElement("div");
+    contextMenu.className = "app-context-menu";
+    contextMenu.setAttribute("role", "menu");
+    contextMenu.innerHTML = items
+      .map(
+        (item, index) => `
+          <button type="button" class="${item.danger ? "danger-item" : ""}" data-menu-index="${index}" role="menuitem">
+            ${escapeHtml(item.label)}
+          </button>
+        `
+      )
+      .join("");
+    document.body.appendChild(contextMenu);
+    const box = contextMenu.getBoundingClientRect();
+    const left = Math.min(x, window.innerWidth - box.width - 8);
+    const top = Math.min(y, window.innerHeight - box.height - 8);
+    contextMenu.style.left = `${Math.max(8, left)}px`;
+    contextMenu.style.top = `${Math.max(8, top)}px`;
+    contextMenu.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-menu-index]");
+      if (!button) return;
+      const item = items[Number(button.dataset.menuIndex)];
+      closeContextMenu();
+      if (item?.action) await item.action();
+    });
+  }
+
+  function ensureDialog() {
+    if (dialog) return dialog;
+    dialog = document.createElement("div");
+    dialog.className = "app-dialog-backdrop";
+    dialog.hidden = true;
+    document.body.appendChild(dialog);
+    return dialog;
+  }
+
+  function closeDialog() {
+    if (!dialog) return;
+    cancelDialog = null;
+    dialog.hidden = true;
+    dialog.innerHTML = "";
+  }
+
+  function modalInput(title, label, initialValue = "") {
+    const node = ensureDialog();
+    return new Promise((resolve) => {
+      node.innerHTML = `
+        <form class="app-dialog" data-dialog-form>
+          <h2>${escapeHtml(title)}</h2>
+          <label>
+            ${escapeHtml(label)}
+            <input name="value" value="${escapeHtml(initialValue)}" autocomplete="off">
+          </label>
+          <div class="dialog-actions">
+            <button class="secondary" type="button" data-dialog-cancel>取消</button>
+            <button type="submit">保存</button>
+          </div>
+        </form>
+      `;
+      node.hidden = false;
+      const form = node.querySelector("[data-dialog-form]");
+      const input = form.elements.value;
+      cancelDialog = () => {
+        closeDialog();
+        resolve(null);
+      };
+      input.focus();
+      input.select();
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const value = input.value.trim();
+        closeDialog();
+        resolve(value || null);
+      });
+      node.querySelector("[data-dialog-cancel]").addEventListener("click", () => cancelDialog?.());
+    });
+  }
+
+  function modalConfirm(title, message, confirmLabel = "确认") {
+    const node = ensureDialog();
+    return new Promise((resolve) => {
+      node.innerHTML = `
+        <section class="app-dialog">
+          <h2>${escapeHtml(title)}</h2>
+          <p>${escapeHtml(message).replace(/\n/g, "<br>")}</p>
+          <div class="dialog-actions">
+            <button class="secondary" type="button" data-dialog-cancel>取消</button>
+            <button class="danger" type="button" data-dialog-confirm>${escapeHtml(confirmLabel)}</button>
+          </div>
+        </section>
+      `;
+      node.hidden = false;
+      cancelDialog = () => {
+        closeDialog();
+        resolve(false);
+      };
+      node.querySelector("[data-dialog-cancel]").focus();
+      node.querySelector("[data-dialog-cancel]").addEventListener("click", () => cancelDialog?.());
+      node.querySelector("[data-dialog-confirm]").addEventListener("click", () => {
+        closeDialog();
+        resolve(true);
+      });
+    });
+  }
+
+  async function modalMessage(title, message) {
+    const node = ensureDialog();
+    return new Promise((resolve) => {
+      node.innerHTML = `
+        <section class="app-dialog">
+          <h2>${escapeHtml(title)}</h2>
+          <p>${escapeHtml(message).replace(/\n/g, "<br>")}</p>
+          <div class="dialog-actions">
+            <button type="button" data-dialog-confirm>知道了</button>
+          </div>
+        </section>
+      `;
+      node.hidden = false;
+      cancelDialog = () => {
+        closeDialog();
+        resolve();
+      };
+      node.querySelector("[data-dialog-confirm]").focus();
+      node.querySelector("[data-dialog-confirm]").addEventListener("click", () => cancelDialog?.());
+    });
+  }
+
+  function refreshTrashEmptyState() {
+    if (!trashList || trashList.querySelector("[data-trash-note]")) return;
+    trashList.innerHTML = `<section class="empty-panel compact"><h2>回收站是空的</h2><p>暂时没有被删除的笔记。</p></section>`;
+  }
+
+  if (app) {
+    render();
+
+    app.addEventListener("contextmenu", (event) => {
+      const noteRowNode = event.target.closest("[data-note-draggable]");
+      const directoryRow = event.target.closest("[data-directory-draggable]");
+      const rootRow = event.target.closest(".tree-root-drop");
+      if (!noteRowNode && !directoryRow && !rootRow) return;
       event.preventDefault();
-      applySummaryPreset(summaryPreset);
-      return;
-    }
-
-    const rewriteButton = event.target.closest("[data-summary-rewrite]");
-    if (rewriteButton) {
-      event.preventDefault();
-      try {
-        await rewriteSummary(rewriteButton);
-      } catch (error) {
-        toast(messageFromError(error));
-      }
-      return;
-    }
-
-    const tokenButton = event.target.closest("[data-append-token]");
-    if (tokenButton) {
-      event.preventDefault();
-      appendToken(tokenButton);
-      return;
-    }
-
-    const fillButton = event.target.closest("[data-fill-input]");
-    if (fillButton) {
-      event.preventDefault();
-      fillNamedInput(fillButton);
-      return;
-    }
-
-    const copyButton = event.target.closest(".copy-link");
-    if (copyButton) {
-      event.preventDefault();
-      await copyLink(copyButton);
-      return;
-    }
-
-    const manageToggle = event.target.closest("[data-directory-manage-toggle]");
-    if (manageToggle) {
-      event.preventDefault();
-      setDirectoryManageMode(bookmarkBrowserFrom(manageToggle), true);
-      return;
-    }
-
-    const manageDone = event.target.closest("[data-directory-manage-done]");
-    if (manageDone) {
-      event.preventDefault();
-      setDirectoryManageMode(bookmarkBrowserFrom(manageDone), false);
-      return;
-    }
-
-    const directoryToggle = event.target.closest("[data-directory-toggle]");
-    if (directoryToggle) {
-      event.preventDefault();
-      if (!isDirectoryManageMode(directoryToggle)) return;
-      toggleDirectoryInline(directoryToggle);
-      return;
-    }
-
-    const directoryCancel = event.target.closest("[data-directory-cancel]");
-    if (directoryCancel) {
-      event.preventDefault();
-      directoryCancel.closest("[data-directory-inline]").hidden = true;
-      return;
-    }
-
-    const rootToggle = event.target.closest("[data-root-directory-toggle]");
-    if (rootToggle) {
-      event.preventDefault();
-      if (!isDirectoryManageMode(rootToggle)) return;
-      toggleRootDirectoryForm(rootToggle);
-      return;
-    }
-
-    const rootCancel = event.target.closest("[data-root-directory-cancel]");
-    if (rootCancel) {
-      event.preventDefault();
-      rootCancel.closest("[data-root-directory-form]").hidden = true;
-      return;
-    }
-
-    const directoryDelete = event.target.closest("[data-directory-delete]");
-    if (directoryDelete) {
-      event.preventDefault();
-      if (!isDirectoryManageMode(directoryDelete)) return;
-      try {
-        await deleteDirectory(directoryDelete);
-      } catch (error) {
-        toast(messageFromError(error));
-      }
-      return;
-    }
-
-    const bulkToggle = event.target.closest("[data-directory-bulk-toggle]");
-    if (bulkToggle) {
-      event.preventDefault();
-      if (!isDirectoryManageMode(bulkToggle)) return;
-      toggleDirectoryBulkMode(bulkToggle);
-      return;
-    }
-
-    const bulkDelete = event.target.closest("[data-directory-bulk-delete]");
-    if (bulkDelete) {
-      event.preventDefault();
-      if (!isDirectoryManageMode(bulkDelete)) return;
-      try {
-        await bulkDeleteDirectories(bulkDelete);
-      } catch (error) {
-        toast(messageFromError(error));
-      }
-      return;
-    }
-
-    const directoryItemsToggle = event.target.closest("[data-directory-items-toggle]");
-    if (directoryItemsToggle) {
-      event.preventDefault();
-      toggleDirectoryItems(directoryItemsToggle);
-      return;
-    }
-
-    const link = event.target.closest("[data-partial-link]");
-    if (!link) return;
-    event.preventDefault();
-    try {
-      await handlePartialLink(link);
-    } catch (error) {
-      toast(messageFromError(error));
-    }
-  });
-
-  document.addEventListener("submit", async (event) => {
-    const form = event.target;
-    if (!(form instanceof HTMLFormElement)) return;
-    if (!form.matches("[data-filter-form], [data-async-form], [data-api-action], [data-directory-form]")) return;
-    event.preventDefault();
-    try {
-      if (form.matches("[data-filter-form]")) {
-        await handleFilterForm(form);
-      } else if (form.matches("[data-directory-form]")) {
-        await handleDirectoryForm(form);
-      } else if (form.dataset.apiAction) {
-        await handleApiForm(form);
-      } else {
-        await handleAsyncForm(form);
-      }
-    } catch (error) {
-      toast(messageFromError(error));
-    }
-  });
-
-  document.addEventListener("dragstart", (event) => {
-    const card = event.target.closest("[data-bookmark-draggable]");
-    const bookmarkHandle = event.target.closest("[data-bookmark-drag-handle]");
-    const blockedBookmarkDrag = event.target.closest("a, button, input, select, textarea, summary, form");
-    if (card && (bookmarkHandle || !blockedBookmarkDrag)) {
-      draggedBookmarkId = card.dataset.bookmarkId;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", draggedBookmarkId);
-      card.classList.add("is-dragging");
-      document.querySelector(".library-sidebar")?.classList.add("is-bookmark-drop-mode");
-      return;
-    }
-
-    const node = event.target.closest("[data-directory-draggable]");
-    if (!node) return;
-    const blockedDirectoryDrag = event.target.closest("button, input, select, textarea, summary, form");
-    if (blockedDirectoryDrag) {
-      event.preventDefault();
-      return;
-    }
-    draggedDirectoryId = node.dataset.directoryId;
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", draggedDirectoryId);
-    node.classList.add("is-dragging");
-  });
-
-  document.addEventListener("dragend", (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    target?.closest("[data-directory-draggable]")?.classList.remove("is-dragging");
-    target?.closest("[data-bookmark-draggable]")?.classList.remove("is-dragging");
-    document
-      .querySelectorAll(".is-drop-target, .is-bookmark-drop-target")
-      .forEach((node) => node.classList.remove("is-drop-target", "is-bookmark-drop-target"));
-    document.querySelector(".library-sidebar")?.classList.remove("is-bookmark-drop-mode");
-    draggedDirectoryId = null;
-    draggedBookmarkId = null;
-  });
-
-  document.addEventListener("dragover", (event) => {
-    if (draggedBookmarkId) {
-      const bookmarkTarget = event.target.closest("[data-bookmark-drop]");
-      if (!bookmarkTarget) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      bookmarkTarget.classList.add("is-bookmark-drop-target");
-      return;
-    }
-
-    const target = event.target.closest("[data-directory-drop]");
-    if (!target || !draggedDirectoryId) return;
-    if (String(target.dataset.parentId || "") === String(draggedDirectoryId)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    target.classList.add("is-drop-target");
-  });
-
-  document.addEventListener("dragleave", (event) => {
-    const bookmarkTarget = event.target.closest("[data-bookmark-drop]");
-    if (bookmarkTarget && !bookmarkTarget.contains(event.relatedTarget)) {
-      bookmarkTarget.classList.remove("is-bookmark-drop-target");
-    }
-    const target = event.target.closest("[data-directory-drop]");
-    if (target && !target.contains(event.relatedTarget)) {
-      target.classList.remove("is-drop-target");
-    }
-  });
-
-  document.addEventListener("drop", async (event) => {
-    if (draggedBookmarkId) {
-      const bookmarkTarget = event.target.closest("[data-bookmark-drop]");
-      if (!bookmarkTarget) return;
-      event.preventDefault();
-      bookmarkTarget.classList.remove("is-bookmark-drop-target");
-      try {
-        await moveDraggedBookmark(bookmarkTarget.dataset.bookmarkDirectoryId || null);
-      } catch (error) {
-        toast(messageFromError(error));
-      } finally {
-        draggedBookmarkId = null;
-        document.querySelector(".library-sidebar")?.classList.remove("is-bookmark-drop-mode");
-        document
-          .querySelectorAll(".is-bookmark-drop-target")
-          .forEach((node) => node.classList.remove("is-bookmark-drop-target"));
-      }
-      return;
-    }
-
-    const target = event.target.closest("[data-directory-drop]");
-    if (!target || !draggedDirectoryId) return;
-    event.preventDefault();
-    target.classList.remove("is-drop-target");
-    try {
-      await moveDraggedDirectory(target.dataset.parentId || null);
-    } catch (error) {
-      toast(messageFromError(error));
-    } finally {
-      draggedDirectoryId = null;
-      document.querySelectorAll(".is-drop-target").forEach((node) => node.classList.remove("is-drop-target"));
-    }
-  });
-
-  document.addEventListener("input", (event) => {
-    const control = event.target;
-    if (!(control instanceof HTMLInputElement)) return;
-    const form = control.closest("[data-filter-form]");
-    if (!form || control.name !== "query") return;
-    scheduleLiveFilter(form, 300);
-  });
-
-  document.addEventListener("change", (event) => {
-    const control = event.target;
-    if (!(control instanceof HTMLSelectElement)) return;
-    const form = control.closest("[data-filter-form]");
-    if (!form) return;
-    scheduleLiveFilter(form, 0);
-  });
-
-  window.addEventListener("popstate", async () => {
-    const target = targetForUrl(window.location.href);
-    const partialUrl = partialUrlFrom(window.location.href);
-    if (!target || !document.querySelector(target)) return;
-    try {
-      await replaceFragment(target, partialUrl, null);
-    } catch (error) {
-      toast(messageFromError(error));
-    }
-  });
-
-  function setupAutoRefresh() {
-    if (autoRefreshTimer) {
-      window.clearInterval(autoRefreshTimer);
-      autoRefreshTimer = null;
-    }
-    const node = document.querySelector("[data-auto-refresh]");
-    if (!node) return;
-    const seconds = Number(node.dataset.autoRefresh || 0);
-    if (!seconds) return;
-    const selector = `#${node.id}`;
-    autoRefreshTimer = window.setInterval(async () => {
-      if (!document.querySelector(selector)) {
-        setupAutoRefresh();
+      if (noteRowNode) {
+        const note = byId(noteRowNode.dataset.noteId);
+        selectedId = Number(noteRowNode.dataset.noteId);
+        selectedDirectoryId = note?.directory_id || "";
+        render();
+        openContextMenu(event.clientX, event.clientY, [
+          { label: "编辑笔记", action: () => renderEditor(note) },
+          { label: "移到回收站", danger: true, action: () => deleteSelected() },
+        ]);
         return;
       }
-      try {
-        await replaceFragment(selector, partialUrlFrom(window.location.href), null);
-      } catch (error) {
-        toast(messageFromError(error));
+      if (directoryRow) {
+        const id = directoryRow.dataset.directoryId;
+        const directory = directories.find((item) => String(item.id) === String(id));
+        selectedDirectoryId = id || "";
+        render();
+        openContextMenu(event.clientX, event.clientY, [
+          {
+            label: "在此新建笔记",
+            action: () => {
+              selectedId = null;
+              selectedDirectoryId = id;
+              renderEditor(null);
+            },
+          },
+          { label: "新建子目录", action: () => createDirectory(id) },
+          { label: "重命名目录", action: () => renameDirectory(id, directory?.name || "") },
+          { label: "删除目录", danger: true, action: () => deleteDirectory(id, directory?.name || "目录") },
+        ]);
+        return;
       }
-    }, seconds * 1000);
+      selectedDirectoryId = "";
+      render();
+      openContextMenu(event.clientX, event.clientY, [
+        {
+          label: "新建未分类笔记",
+          action: () => {
+            selectedId = null;
+            selectedDirectoryId = "";
+            renderEditor(null);
+          },
+        },
+        { label: "新建根目录", action: () => createDirectory(null) },
+      ]);
+    });
+
+    app.addEventListener("click", async (event) => {
+      if (Date.now() < suppressClickUntil) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      closeContextMenu();
+      const toggle = event.target.closest("[data-toggle-directory]");
+      if (toggle) {
+        const values = collapsedDirectories();
+        const id = String(toggle.dataset.toggleDirectory);
+        if (values.has(id)) values.delete(id);
+        else values.add(id);
+        saveCollapsedDirectories(values);
+        renderTree();
+        return;
+      }
+
+      const selectDirectory = event.target.closest("[data-select-directory]");
+      if (selectDirectory) {
+        selectedDirectoryId = selectDirectory.dataset.selectDirectory || "";
+        render();
+        return;
+      }
+
+      const select = event.target.closest("[data-select-note]");
+      if (select) {
+        const note = byId(select.dataset.selectNote);
+        selectedId = Number(select.dataset.selectNote);
+        selectedDirectoryId = note?.directory_id || "";
+        editingId = null;
+        render();
+        return;
+      }
+
+      if (event.target.closest("[data-new-directory]")) {
+        await createDirectory(null);
+        return;
+      }
+
+      if (event.target.closest("[data-new-note]")) {
+        renderEditor(null);
+        return;
+      }
+
+      if (event.target.closest("[data-edit-note]")) {
+        renderEditor(byId(selectedId));
+        return;
+      }
+
+      if (event.target.closest("[data-cancel-edit]")) {
+        editingId = null;
+        render();
+        return;
+      }
+
+      if (event.target.closest("[data-delete-note]")) {
+        await deleteSelected();
+      }
+    });
+
+    app.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const blocked = event.target.closest("button, input, select, textarea, a");
+      if (blocked) return;
+      const note = event.target.closest("[data-note-draggable]");
+      const directory = event.target.closest("[data-directory-draggable]");
+      const node = note || directory;
+      if (!node) return;
+      pointerDrag = {
+        active: false,
+        node,
+        startX: event.clientX,
+        startY: event.clientY,
+        pointerId: event.pointerId,
+        dragged: note
+          ? { type: "note", id: Number(note.dataset.noteId) }
+          : { type: "directory", id: Number(directory.dataset.directoryId) },
+      };
+    });
+
+    app.addEventListener("dragstart", (event) => {
+      if (event.target.closest("[data-note-draggable], [data-directory-draggable]")) {
+        event.preventDefault();
+        return;
+      }
+      const note = event.target.closest("[data-note-draggable]");
+      if (note) {
+        const blocked = event.target.closest("input, select, textarea, a");
+        if (blocked) {
+          event.preventDefault();
+          return;
+        }
+        dragged = { type: "note", id: Number(note.dataset.noteId) };
+        note.classList.add("is-dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", String(dragged.id));
+        return;
+      }
+      const directory = event.target.closest("[data-directory-draggable]");
+      if (directory) {
+        const blocked = event.target.closest("button, input, select, textarea, a");
+        if (blocked) {
+          event.preventDefault();
+          return;
+        }
+        dragged = { type: "directory", id: Number(directory.dataset.directoryId) };
+        directory.classList.add("is-dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", String(dragged.id));
+      }
+    });
+
+    app.addEventListener("dragend", () => {
+      dragged = null;
+      app.querySelectorAll(".is-dragging, .is-drop-target").forEach((node) => node.classList.remove("is-dragging", "is-drop-target"));
+    });
+
+    app.addEventListener("dragover", (event) => {
+      if (!dragged) return;
+      const target = event.target.closest("[data-directory-drop]");
+      if (!target) return;
+      if (!validDropTargetFor(dragged, target)) return;
+      event.preventDefault();
+      target.classList.add("is-drop-target");
+      event.dataTransfer.dropEffect = "move";
+    });
+
+    app.addEventListener("dragleave", (event) => {
+      const target = event.target.closest("[data-directory-drop]");
+      if (target && !target.contains(event.relatedTarget)) target.classList.remove("is-drop-target");
+    });
+
+    app.addEventListener("drop", async (event) => {
+      const target = event.target.closest("[data-directory-drop]");
+      if (!target || !dragged) return;
+      if (!validDropTargetFor(dragged, target)) return;
+      event.preventDefault();
+      target.classList.remove("is-drop-target");
+      try {
+        await moveDraggedTo(target.dataset.directoryId || null);
+      } catch (error) {
+        await modalMessage("移动失败", String(error.message || error).slice(0, 180));
+      } finally {
+        dragged = null;
+      }
+    });
+
+    app.querySelector("[data-note-form]")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveCurrent(event.currentTarget);
+    });
+
+    app.querySelector("[data-note-search]")?.addEventListener("input", (event) => {
+      clearTimeout(event.currentTarget._timer);
+      event.currentTarget._timer = setTimeout(() => reloadNotes(event.currentTarget.value), 180);
+    });
+
+    app.addEventListener("keydown", (event) => {
+      const note = event.target.closest("[data-select-note]");
+      if (!note || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      note.click();
+    });
   }
 
-  async function restoreStoredDirectoryView() {
-    const url = asUrl(window.location.href);
-    if (url.pathname !== "/bookmarks" || url.searchParams.has("tree_view")) return;
-    const mode = storedDirectoryViewMode();
-    if (!mode || mode === "structure") return;
-    const nextUrl = urlWithDirectoryView(window.location.href, mode);
-    try {
-      await replaceFragment("#bookmark-browser", partialUrlFrom(nextUrl), nextUrl, { history: "replace" });
-    } catch (error) {
-      toast(messageFromError(error));
+  if (trashList) {
+    trashList.addEventListener("click", async (event) => {
+      closeContextMenu();
+      const restore = event.target.closest("[data-restore-note]");
+      if (restore) {
+        await restoreNote(restore.dataset.restoreNote);
+        return;
+      }
+      const purge = event.target.closest("[data-purge-note]");
+      if (purge) await purgeNote(purge.dataset.purgeNote);
+    });
+  }
+
+  document.addEventListener("pointermove", (event) => {
+    if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+    const dx = Math.abs(event.clientX - pointerDrag.startX);
+    const dy = Math.abs(event.clientY - pointerDrag.startY);
+    if (!pointerDrag.active && dx + dy < 7) return;
+    if (!pointerDrag.active) {
+      pointerDrag.active = true;
+      pointerDrag.node.classList.add("is-dragging");
+      document.body.classList.add("is-tree-dragging");
     }
-  }
+    event.preventDefault();
+    updatePointerDropTarget(event);
+  });
 
-  setupAutoRefresh();
-  restoreCollapsedDirectoryItems();
-  restoreStoredDirectoryView();
+  document.addEventListener("pointerup", async (event) => {
+    if (!pointerDrag || pointerDrag.pointerId !== event.pointerId) return;
+    const wasActive = pointerDrag.active;
+    const dropTarget = activeDropTarget;
+    const dragState = pointerDrag.dragged;
+    if (wasActive) {
+      event.preventDefault();
+      suppressClickUntil = Date.now() + 250;
+    }
+    finishPointerDrag();
+    if (!wasActive || !dropTarget) return;
+    dragged = dragState;
+    try {
+      await moveDraggedTo(dropTarget.dataset.directoryId || null);
+    } catch (error) {
+      await modalMessage("移动失败", String(error.message || error).slice(0, 180));
+    } finally {
+      dragged = null;
+    }
+  });
+
+  document.addEventListener("pointercancel", finishPointerDrag);
+
+  document.addEventListener("click", (event) => {
+    if (contextMenu && !event.target.closest(".app-context-menu")) closeContextMenu();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeContextMenu();
+      if (cancelDialog) cancelDialog();
+    }
+  });
 })();

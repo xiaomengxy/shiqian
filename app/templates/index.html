@@ -1,55 +1,78 @@
 {% extends "base.html" %}
-{% block title %}拾签 · 添加内容{% endblock %}
+{% block title %}拾签 · 笔记{% endblock %}
 {% block content %}
-<section class="home-layout">
-  <div class="capture-panel">
-    <div class="section-kicker">Quick Capture</div>
-    <h1>把线索先拾起来。</h1>
-    <p>粘贴链接、词、短句或段落，拾签会先智能分组，再自动命名、提取关键词、打标签，并推荐一个多级目录。</p>
-    <form method="post" action="/items/parse" class="stack capture-form">
-      <textarea name="input_text" rows="11" placeholder="资料标题&#10;https://example.com/article&#10;提取码：abcd&#10;&#10;&#10;提示词工程&#10;&#10;&#10;这是一段想保存起来的想法或资料。"></textarea>
-      <div class="toolbar">
-        <label>
-          Provider
-          <select name="provider">
-            <option value="">默认：{{ settings.llm_provider }}</option>
-            <option value="deepseek">DeepSeek</option>
-            <option value="openai">OpenAI</option>
-          </select>
-        </label>
-        <button type="submit">预览分组</button>
+<section class="notes-app" data-notes-app>
+  <aside class="notes-sidebar">
+    <div class="sidebar-head">
+      <div>
+        <p class="eyebrow">Library</p>
+        <h1>笔记</h1>
       </div>
-      <p class="form-hint">提交后会先进入分组预览。普通换行只作为排版，不会直接拆成多条；确认分组后才进入解析队列。</p>
-    </form>
-  </div>
+      <div class="sidebar-actions">
+        <button type="button" class="secondary" data-new-directory>新目录</button>
+        <button type="button" data-new-note>新建</button>
+      </div>
+    </div>
 
-  <aside class="side-rail">
-    <section class="rail-card">
-      <div class="section-kicker">Provider</div>
-      <dl class="kv compact">
-        <dt>DeepSeek</dt>
-        <dd>{{ settings.deepseek_model }} · {% if has_deepseek_key %}已配置{% else %}规则降级{% endif %}</dd>
-        <dt>OpenAI</dt>
-        <dd>{{ settings.openai_model }} · {% if has_openai_key %}已配置{% else %}规则降级{% endif %}</dd>
-      </dl>
-      <a href="/settings">配置 API</a>
-    </section>
+    <label class="search-box">
+      <span>搜索</span>
+      <input type="search" data-note-search placeholder="标题、正文或来源链接">
+    </label>
 
-    <section class="rail-card">
-      <div class="section-kicker">Recent</div>
-      {% if recent_jobs %}
-        <ul class="plain-list">
-          {% for job in recent_jobs %}
-            <li>
-              <a href="/review/{{ job.id }}">{{ job.raw_input or job.input_url }}</a>
-              <span>{{ job.source_type }} · {{ job.status }}</span>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="muted">还没有整理任务。</p>
-      {% endif %}
-    </section>
+    <div class="tree-root-drop" data-directory-drop data-directory-id="">
+      <span>未分类</span>
+      <small data-root-count></small>
+    </div>
+    <nav class="note-tree" data-note-tree aria-label="目录和笔记"></nav>
   </aside>
+
+  <article class="note-stage">
+    <section class="empty-panel" data-empty-panel>
+      <p class="eyebrow">Markdown Notes</p>
+      <h2>从一条笔记开始。</h2>
+      <p>左侧是目录和条目，右侧专心阅读或编辑 Markdown。后续的视频、链接和解析内容也会先落到这里。</p>
+      <button type="button" data-new-note>新建笔记</button>
+    </section>
+
+    <section class="reader-panel" data-reader-panel hidden>
+      <div class="note-toolbar">
+        <div>
+          <p class="eyebrow" data-note-source-label>未分类</p>
+          <h2 data-note-title></h2>
+          <a data-note-source href="#" target="_blank" rel="noreferrer" hidden></a>
+        </div>
+        <div class="toolbar-actions">
+          <button class="secondary" type="button" data-edit-note>编辑</button>
+          <button class="danger ghost" type="button" data-delete-note>删除</button>
+        </div>
+      </div>
+      <div class="markdown-body" data-note-rendered></div>
+      <p class="timestamp" data-note-updated></p>
+    </section>
+
+    <section class="editor-panel" data-editor-panel hidden>
+      <form data-note-form>
+        <div class="editor-head">
+          <input name="title" class="title-input" placeholder="Untitled">
+          <div class="toolbar-actions">
+            <button class="secondary" type="button" data-cancel-edit>取消</button>
+            <button type="submit">保存</button>
+          </div>
+        </div>
+        <label>
+          来源链接
+          <input name="source_url" placeholder="https://...">
+        </label>
+        <label>
+          Markdown
+          <textarea name="body_md" rows="18" placeholder="# 标题&#10;&#10;写下你的笔记..."></textarea>
+        </label>
+      </form>
+    </section>
+  </article>
 </section>
+
+<script type="application/json" id="notes-data">{{ notes|tojson }}</script>
+<script type="application/json" id="tree-data">{{ tree|tojson }}</script>
+<script type="application/json" id="directories-data">{{ directories|tojson }}</script>
 {% endblock %}
