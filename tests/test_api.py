@@ -38,7 +38,12 @@ def test_home_renders_empty_notes_workspace():
         assert 'data-note-form' in page.text
         assert 'id="notes-data"' in page.text
         assert 'id="tree-data"' in page.text
+        assert 'data-feature-menu' in page.text
         assert "新目录" in page.text
+        assert "学习" in page.text
+        assert "功能" in page.text
+        assert "回收站" not in page.text
+        assert "设置" not in page.text
         assert "从一条笔记开始" in page.text
     finally:
         app.dependency_overrides.clear()
@@ -237,8 +242,22 @@ def test_trash_page_renders_deleted_notes_and_actions():
         assert page.status_code == 200
         assert "回收站" in page.text
         assert "Deleted" in page.text
+        assert "显示删除按钮" in page.text
+        assert 'data-trash-delete-toggle' in page.text
         assert 'data-restore-note=' in page.text
         assert 'data-purge-note=' in page.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_learning_page_renders_bilibili_import_placeholder():
+    try:
+        client = _client_with_db()
+        page = client.get("/learning")
+        assert page.status_code == 200
+        assert "收藏夹到 Markdown 笔记" in page.text
+        assert "扫码登录" in page.text
+        assert 'data-active-nav="learning"' in page.text
     finally:
         app.dependency_overrides.clear()
 

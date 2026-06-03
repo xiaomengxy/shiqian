@@ -1,8 +1,10 @@
 (() => {
   const app = document.querySelector("[data-notes-app]");
   const trashList = document.querySelector("[data-trash-list]");
+  const trashDeleteToggle = document.querySelector("[data-trash-delete-toggle]");
   const md = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
   const collapsedKey = "shiqian.notes.collapsedDirectories";
+  const showDeleteEntrypointsKey = "shiqian.notes.showDeleteEntrypoints";
 
   function parseJson(id, fallback) {
     const node = document.querySelector(`#${id}`);
@@ -27,6 +29,7 @@
   let contextMenu = null;
   let dialog = null;
   let cancelDialog = null;
+  let showDeleteEntrypoints = storedBoolean(showDeleteEntrypointsKey, false);
 
   function collapsedDirectories() {
     try {
@@ -39,6 +42,24 @@
   function saveCollapsedDirectories(values) {
     try {
       localStorage.setItem(collapsedKey, JSON.stringify(Array.from(values)));
+    } catch {
+      // Local storage can be unavailable in restricted browser contexts.
+    }
+  }
+
+  function storedBoolean(key, fallback) {
+    try {
+      const value = localStorage.getItem(key);
+      if (value === null) return fallback;
+      return value === "true";
+    } catch {
+      return fallback;
+    }
+  }
+
+  function saveBoolean(key, value) {
+    try {
+      localStorage.setItem(key, String(Boolean(value)));
     } catch {
       // Local storage can be unavailable in restricted browser contexts.
     }
@@ -162,6 +183,8 @@
       source.removeAttribute("href");
       source.textContent = "";
     }
+    const deleteButton = reader.querySelector("[data-delete-note]");
+    if (deleteButton) deleteButton.hidden = !showDeleteEntrypoints;
   }
 
   function renderEditor(note = null) {
@@ -209,6 +232,7 @@
   }
 
   async function deleteSelected() {
+    if (!showDeleteEntrypoints) return;
     if (!selectedId) return;
     const confirmed = await modalConfirm("删除笔记", "把这条笔记移入回收站？", "删除");
     if (!confirmed) return;
@@ -324,6 +348,7 @@
   function closeContextMenu() {
     contextMenu?.remove();
     contextMenu = null;
+    document.querySelector("[data-feature-menu]")?.setAttribute("aria-expanded", "false");
   }
 
   function openContextMenu(x, y, items) {
@@ -333,11 +358,22 @@
     contextMenu.setAttribute("role", "menu");
     contextMenu.innerHTML = items
       .map(
-        (item, index) => `
-          <button type="button" class="${item.danger ? "danger-item" : ""}" data-menu-index="${index}" role="menuitem">
-            ${escapeHtml(item.label)}
-          </button>
-        `
+        (item, index) => {
+          if (item.type === "separator") return `<span class="menu-separator" role="separator"></span>`;
+          if (item.type === "switch") {
+            return `
+              <button type="button" class="menu-switch" data-menu-index="${index}" role="menuitemcheckbox" aria-checked="${item.checked ? "true" : "false"}">
+                <span>${escapeHtml(item.label)}</span>
+                <span class="switch-track" aria-hidden="true"><span></span></span>
+              </button>
+            `;
+          }
+          return `
+            <button type="button" class="${item.danger ? "danger-item" : ""}" data-menu-index="${index}" role="menuitem">
+              ${escapeHtml(item.label)}
+            </button>
+          `;
+        }
       )
       .join("");
     document.body.appendChild(contextMenu);
@@ -351,8 +387,27 @@
       if (!button) return;
       const item = items[Number(button.dataset.menuIndex)];
       closeContextMenu();
+      if (item?.href) {
+        window.location.href = item.href;
+        return;
+      }
       if (item?.action) await item.action();
     });
+  }
+
+  function openFeatureMenu(button) {
+    const box = button.getBoundingClientRect();
+    const items = [
+      { label: "回收站", href: "/trash" },
+      { label: "设置", href: "/settings" },
+    ];
+    openContextMenu(box.right, box.bottom + 6, items);
+    button.setAttribute("aria-expanded", "true");
+  }
+
+  function renderDeleteEntryToggle() {
+    if (!trashDeleteToggle) return;
+    trashDeleteToggle.setAttribute("aria-pressed", showDeleteEntrypoints ? "true" : "false");
   }
 
   function ensureDialog() {
@@ -474,10 +529,11 @@
         selectedId = Number(noteRowNode.dataset.noteId);
         selectedDirectoryId = note?.directory_id || "";
         render();
-        openContextMenu(event.clientX, event.clientY, [
-          { label: "编辑笔记", action: () => renderEditor(note) },
-          { label: "移到回收站", danger: true, action: () => deleteSelected() },
-        ]);
+        const items = [{ label: "编辑笔记", action: () => renderEditor(note) }];
+        if (showDeleteEntrypoints) {
+          items.push({ label: "移到回收站", danger: true, action: () => deleteSelected() });
+        }
+        openContextMenu(event.clientX, event.clientY, items);
         return;
       }
       if (directoryRow) {
@@ -682,6 +738,7 @@
   }
 
   if (trashList) {
+    renderDeleteEntryToggle();
     trashList.addEventListener("click", async (event) => {
       closeContextMenu();
       const restore = event.target.closest("[data-restore-note]");
@@ -691,6 +748,15 @@
       }
       const purge = event.target.closest("[data-purge-note]");
       if (purge) await purgeNote(purge.dataset.purgeNote);
+    });
+  }
+
+  if (trashDeleteToggle) {
+    renderDeleteEntryToggle();
+    trashDeleteToggle.addEventListener("click", () => {
+      showDeleteEntrypoints = !showDeleteEntrypoints;
+      saveBoolean(showDeleteEntrypointsKey, showDeleteEntrypoints);
+      renderDeleteEntryToggle();
     });
   }
 
@@ -732,6 +798,16 @@
   document.addEventListener("pointercancel", finishPointerDrag);
 
   document.addEventListener("click", (event) => {
+    const featureButton = event.target.closest("[data-feature-menu]");
+    if (featureButton) {
+      event.preventDefault();
+      if (contextMenu) {
+        closeContextMenu();
+      } else {
+        openFeatureMenu(featureButton);
+      }
+      return;
+    }
     if (contextMenu && !event.target.closest(".app-context-menu")) closeContextMenu();
   });
 

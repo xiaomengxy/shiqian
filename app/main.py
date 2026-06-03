@@ -78,6 +78,15 @@ def trash(request: Request, db: Session = Depends(get_db)):
     )
 
 
+@app.get("/learning")
+def learning(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "learning.html",
+        {"request": request, "active_nav": "learning"},
+    )
+
+
 @app.get("/settings")
 def settings_page(request: Request, saved: str = "", db: Session = Depends(get_db)):
     runtime = get_effective_settings(db, settings)

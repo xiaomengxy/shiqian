@@ -8,7 +8,16 @@
       <h1>回收站</h1>
       <p>删除的笔记会先留在这里，恢复后回到笔记列表。</p>
     </div>
-    <a class="button secondary" href="/">返回笔记</a>
+    <div class="page-actions">
+      <button class="delete-entry-switch" type="button" data-trash-delete-toggle aria-pressed="false">
+        <span>
+          <strong>显示删除按钮</strong>
+          <small>控制笔记页的删除入口</small>
+        </span>
+        <span class="switch-track" aria-hidden="true"><span></span></span>
+      </button>
+      <a class="button secondary" href="/">返回笔记</a>
+    </div>
   </header>
 
   <div class="trash-list" data-trash-list>

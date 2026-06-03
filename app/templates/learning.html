@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}拾签 · 学习{% endblock %}
+{% block content %}
+<section class="learning-page">
+  <header class="page-head">
+    <div>
+      <p class="eyebrow">Learning</p>
+      <h1>学习</h1>
+      <p>这里会承接 Bilibili 收藏夹读取、内容解析和笔记生成。第一步先保留清晰入口，不打扰当前笔记库。</p>
+    </div>
+    <a class="button secondary" href="/">返回笔记</a>
+  </header>
+
+  <section class="learning-panel">
+    <div>
+      <p class="eyebrow">Bilibili</p>
+      <h2>收藏夹到 Markdown 笔记</h2>
+      <p>后续流程会从登录、选择收藏夹、抽取字幕或音频文本开始，最后把总结结果写入普通笔记。</p>
+    </div>
+    <ol class="learning-flow">
+      <li>扫码登录并保存本地会话</li>
+      <li>读取收藏夹和视频列表</li>
+      <li>优先取字幕，缺失时再走语音识别</li>
+      <li>调用当前设置里的模型生成 Markdown 笔记</li>
+      <li>写入 Bilibili 目录，并保留视频来源信息</li>
+    </ol>
+  </section>
+</section>
+{% endblock %}
