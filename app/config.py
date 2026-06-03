@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     llm_provider: str = "deepseek"
     openai_api_key: str = ""
     openai_model: str = "gpt-5-mini"
+    openai_base_url: str = "https://api.openai.com/v1"
     deepseek_api_key: str = ""
     deepseek_model: str = "deepseek-v4-flash"
     database_url: str = "sqlite:///./bookmarks.db"
@@ -20,4 +21,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-

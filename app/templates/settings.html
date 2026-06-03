@@ -47,6 +47,10 @@
             <input name="openai_model" value="{{ settings.openai_model }}" placeholder="gpt-5-mini">
           </label>
           <label>
+            基址
+            <input name="openai_base_url" value="{{ settings.openai_base_url }}" placeholder="https://api.openai.com/v1">
+          </label>
+          <label>
             API Key
             <input name="openai_api_key" type="password" placeholder="{% if has_openai_key %}保留当前：{{ openai_key_label }}{% else %}粘贴 OpenAI API key{% endif %}">
           </label>
@@ -59,6 +63,7 @@
 
       <dl class="settings-meta">
         <dt>DeepSeek Key</dt><dd>{{ deepseek_key_label }}</dd>
+        <dt>OpenAI 基址</dt><dd>{{ settings.openai_base_url }}</dd>
         <dt>OpenAI Key</dt><dd>{{ openai_key_label }}</dd>
         <dt>数据库</dt><dd>{{ settings.database_url }}</dd>
       </dl>

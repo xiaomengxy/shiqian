@@ -1,29 +1,69 @@
 {% extends "base.html" %}
 {% block title %}拾签 · 学习{% endblock %}
 {% block content %}
-<section class="learning-page">
+<section class="learning-page" data-learning-app>
   <header class="page-head">
     <div>
       <p class="eyebrow">Learning</p>
       <h1>学习</h1>
-      <p>这里会承接 Bilibili 收藏夹读取、内容解析和笔记生成。第一步先保留清晰入口，不打扰当前笔记库。</p>
+      <p>Bilibili 收藏夹读取、字幕摘要和 Markdown 笔记生成都放在这里，生成后会进入普通笔记目录树。</p>
     </div>
     <a class="button secondary" href="/">返回笔记</a>
   </header>
 
-  <section class="learning-panel">
-    <div>
-      <p class="eyebrow">Bilibili</p>
-      <h2>收藏夹到 Markdown 笔记</h2>
-      <p>后续流程会从登录、选择收藏夹、抽取字幕或音频文本开始，最后把总结结果写入普通笔记。</p>
-    </div>
-    <ol class="learning-flow">
-      <li>扫码登录并保存本地会话</li>
-      <li>读取收藏夹和视频列表</li>
-      <li>优先取字幕，缺失时再走语音识别</li>
-      <li>调用当前设置里的模型生成 Markdown 笔记</li>
-      <li>写入 Bilibili 目录，并保留视频来源信息</li>
-    </ol>
+  <section class="learning-workbench">
+    <aside class="learning-side">
+      <section class="learning-box" data-bili-login-box>
+        <div class="learning-box-head">
+          <div>
+            <p class="eyebrow">Account</p>
+            <h2>Bilibili 登录</h2>
+          </div>
+          <button class="secondary" type="button" data-bili-refresh-session>刷新</button>
+        </div>
+        <div class="bili-login-state" data-bili-login-state>
+          <p>正在检查登录状态...</p>
+        </div>
+      </section>
+
+      <section class="learning-box">
+        <div class="learning-box-head">
+          <div>
+            <p class="eyebrow">Folders</p>
+            <h2>收藏夹</h2>
+          </div>
+          <button type="button" data-bili-load-folders>读取</button>
+        </div>
+        <div class="bili-folder-list" data-bili-folder-list>
+          <p class="muted-text">登录后读取收藏夹。</p>
+        </div>
+      </section>
+    </aside>
+
+    <section class="learning-main">
+      <div class="learning-box-head">
+        <div>
+          <p class="eyebrow">Videos</p>
+          <h2 data-bili-current-folder>选择收藏夹</h2>
+        </div>
+        <div class="toolbar-actions">
+          <button class="bili-overwrite-switch secondary" type="button" data-bili-overwrite-toggle aria-pressed="false">
+            <span>重新生成</span>
+            <span class="switch-track" aria-hidden="true"><span></span></span>
+          </button>
+          <button class="secondary" type="button" data-bili-select-all>全选</button>
+          <button class="secondary danger ghost" type="button" data-bili-cancel-import hidden>中断</button>
+          <button type="button" data-bili-import-selected>生成笔记</button>
+        </div>
+      </div>
+      <div class="bili-video-list" data-bili-video-list>
+        <section class="empty-panel compact">
+          <h2>还没有视频</h2>
+          <p>先登录并读取一个收藏夹。</p>
+        </section>
+      </div>
+      <div class="bili-import-log" data-bili-import-log hidden></div>
+    </section>
   </section>
 </section>
 {% endblock %}

@@ -13,6 +13,7 @@ CONFIG_KEYS = {
     "llm_provider",
     "openai_api_key",
     "openai_model",
+    "openai_base_url",
     "deepseek_api_key",
     "deepseek_model",
 }
@@ -23,6 +24,7 @@ class RuntimeSettings:
     llm_provider: str
     openai_api_key: str
     openai_model: str
+    openai_base_url: str
     deepseek_api_key: str
     deepseek_model: str
     database_url: str
@@ -33,6 +35,7 @@ def get_effective_settings(db: Session, env_settings: Settings) -> RuntimeSettin
         "llm_provider": env_settings.llm_provider,
         "openai_api_key": env_settings.openai_api_key,
         "openai_model": env_settings.openai_model,
+        "openai_base_url": env_settings.openai_base_url,
         "deepseek_api_key": env_settings.deepseek_api_key,
         "deepseek_model": env_settings.deepseek_model,
         "database_url": env_settings.database_url,
@@ -45,6 +48,7 @@ def get_effective_settings(db: Session, env_settings: Settings) -> RuntimeSettin
         llm_provider=provider,
         openai_api_key=values["openai_api_key"],
         openai_model=values["openai_model"] or "gpt-5-mini",
+        openai_base_url=_normalize_openai_base_url(values["openai_base_url"]),
         deepseek_api_key=values["deepseek_api_key"],
         deepseek_model=values["deepseek_model"] or "deepseek-v4-flash",
         database_url=values["database_url"],
@@ -56,6 +60,7 @@ def save_frontend_settings(
     *,
     llm_provider: str,
     openai_model: str,
+    openai_base_url: str,
     deepseek_model: str,
     openai_api_key: str,
     deepseek_api_key: str,
@@ -65,6 +70,7 @@ def save_frontend_settings(
     provider = llm_provider if llm_provider in {"openai", "deepseek"} else "deepseek"
     _upsert(db, "llm_provider", provider)
     _upsert(db, "openai_model", openai_model.strip() or "gpt-5-mini")
+    _upsert(db, "openai_base_url", _normalize_openai_base_url(openai_base_url))
     _upsert(db, "deepseek_model", deepseek_model.strip() or "deepseek-v4-flash")
     if clear_openai_key:
         _upsert(db, "openai_api_key", "")
@@ -92,3 +98,10 @@ def _upsert(db: Session, key: str, value: str) -> None:
     else:
         row.value = value
         row.updated_at = datetime.utcnow()
+
+
+def _normalize_openai_base_url(value: str) -> str:
+    clean = (value or "").strip().rstrip("/")
+    if clean.endswith("/responses"):
+        clean = clean[: -len("/responses")]
+    return clean or "https://api.openai.com/v1"

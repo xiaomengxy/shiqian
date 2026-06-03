@@ -2,9 +2,11 @@
   const app = document.querySelector("[data-notes-app]");
   const trashList = document.querySelector("[data-trash-list]");
   const trashDeleteToggle = document.querySelector("[data-trash-delete-toggle]");
+  const learningApp = document.querySelector("[data-learning-app]");
   const md = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
   const collapsedKey = "shiqian.notes.collapsedDirectories";
   const showDeleteEntrypointsKey = "shiqian.notes.showDeleteEntrypoints";
+  const learningStateKey = "shiqian.learning.state";
 
   function parseJson(id, fallback) {
     const node = document.querySelector(`#${id}`);
@@ -30,6 +32,19 @@
   let dialog = null;
   let cancelDialog = null;
   let showDeleteEntrypoints = storedBoolean(showDeleteEntrypointsKey, false);
+  let biliState = {
+    loggedIn: false,
+    user: null,
+    folders: [],
+    selectedFolder: null,
+    videos: [],
+    overwriteExisting: false,
+    importLog: null,
+    importJobId: null,
+    importRunning: false,
+    pollTimer: null,
+    jobPollTimer: null,
+  };
 
   function collapsedDirectories() {
     try {
@@ -101,6 +116,403 @@
     });
     if (!response.ok) throw new Error(await response.text());
     return response.json();
+  }
+
+  function learningNode(selector) {
+    return learningApp?.querySelector(selector) || null;
+  }
+
+  function restoreLearningState() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(learningStateKey) || "null");
+      if (!saved || typeof saved !== "object") return;
+      biliState = {
+        ...biliState,
+        loggedIn: Boolean(saved.loggedIn),
+        user: saved.user || null,
+        folders: Array.isArray(saved.folders) ? saved.folders : [],
+        selectedFolder: saved.selectedFolder || null,
+        videos: Array.isArray(saved.videos) ? saved.videos : [],
+        overwriteExisting: Boolean(saved.overwriteExisting),
+        importLog: saved.importLog || null,
+        importJobId: saved.importJobId || null,
+        importRunning: Boolean(saved.importRunning),
+        pollTimer: null,
+        jobPollTimer: null,
+      };
+    } catch {
+      // Session storage can be unavailable or manually edited.
+    }
+  }
+
+  function persistLearningState() {
+    if (!learningApp) return;
+    try {
+      sessionStorage.setItem(
+        learningStateKey,
+        JSON.stringify({
+          loggedIn: biliState.loggedIn,
+          user: biliState.user,
+          folders: biliState.folders,
+          selectedFolder: biliState.selectedFolder,
+          videos: biliState.videos,
+          overwriteExisting: biliState.overwriteExisting,
+          importLog: biliState.importLog,
+          importJobId: biliState.importJobId,
+          importRunning: biliState.importRunning,
+        })
+      );
+    } catch {
+      // Session storage can be unavailable in restricted browser contexts.
+    }
+  }
+
+  function clearLearningState() {
+    try {
+      sessionStorage.removeItem(learningStateKey);
+    } catch {
+      // Session storage can be unavailable in restricted browser contexts.
+    }
+  }
+
+  function renderBiliLogFromState() {
+    const node = learningNode("[data-bili-import-log]");
+    if (!node || !biliState.importLog) return;
+    node.hidden = false;
+    node.className = `bili-import-log ${biliState.importLog.tone || ""}`;
+    node.innerHTML = biliState.importLog.message || "";
+  }
+
+  function renderBiliLogin() {
+    const node = learningNode("[data-bili-login-state]");
+    if (!node) return;
+    if (biliState.loggedIn) {
+      node.innerHTML = `
+        <div class="bili-user">
+          ${biliState.user?.face ? `<img src="${escapeHtml(biliState.user.face)}" alt="">` : `<span class="bili-avatar-fallback">B</span>`}
+          <span>
+            <strong>${escapeHtml(biliState.user?.uname || "Bilibili 用户")}</strong>
+            <small>已登录，可以读取收藏夹。</small>
+          </span>
+        </div>
+        <button class="secondary" type="button" data-bili-logout>退出登录</button>
+      `;
+      return;
+    }
+    node.innerHTML = `
+      <p class="muted-text">扫码登录后，本地保存会话 Cookie，用于读取你的收藏夹。</p>
+      <button type="button" data-bili-start-login>扫码登录</button>
+    `;
+  }
+
+  function renderBiliFolders() {
+    const node = learningNode("[data-bili-folder-list]");
+    if (!node) return;
+    if (!biliState.folders.length) {
+      node.innerHTML = `<p class="muted-text">${biliState.loggedIn ? "点击读取收藏夹。" : "登录后读取收藏夹。"}</p>`;
+      return;
+    }
+    node.innerHTML = biliState.folders
+      .map(
+        (folder) => `
+          <button class="bili-folder ${biliState.selectedFolder?.media_id === folder.media_id ? "active" : ""}" type="button" data-bili-folder="${folder.media_id}">
+            <span>${escapeHtml(folder.title)}</span>
+            <small>${folder.media_count || 0}</small>
+          </button>
+        `
+      )
+      .join("");
+  }
+
+  function renderBiliVideos() {
+    const title = learningNode("[data-bili-current-folder]");
+    if (title) {
+      const folderTitle = biliState.selectedFolder?.title || "选择收藏夹";
+      title.textContent = biliState.videos.length ? `${folderTitle} (${biliState.videos.length})` : folderTitle;
+    }
+    const list = learningNode("[data-bili-video-list]");
+    if (!list) return;
+    if (!biliState.videos.length) {
+      list.innerHTML = `<section class="empty-panel compact"><h2>还没有视频</h2><p>选择一个收藏夹后读取视频。</p></section>`;
+      return;
+    }
+    list.innerHTML = biliState.videos
+      .map(
+        (video, index) => `
+          <label class="bili-video">
+            <input type="checkbox" data-bili-video-check="${index}" checked>
+            <span>
+              <strong>${escapeHtml(video.title || video.bvid)}</strong>
+              <small>${escapeHtml([video.owner_name, video.needs_regeneration ? "需要重新生成" : video.note_id ? "已生成笔记" : "", biliContentStatus(video)].filter(Boolean).join(" · ") || video.bvid)}</small>
+            </span>
+          </label>
+        `
+      )
+      .join("");
+  }
+
+  function biliContentStatus(item) {
+    if (!item?.content_source) return "";
+    if (item.content_trust === "stale") return "旧版需重生";
+    if (item.content_trust === "untrusted") return "字幕疑似跑题";
+    if (item.content_trust === "weak") return "内容较弱";
+    if (item.content_source === "subtitle") return "字幕可信";
+    if (item.content_source === "ai_summary") return "AI摘要可信";
+    if (item.content_source === "basic_info") return "仅基础信息";
+    if (String(item.content_source).startsWith("untrusted_")) return "字幕疑似跑题";
+    return item.content_source;
+  }
+
+  function renderBiliOverwriteToggle() {
+    const button = learningNode("[data-bili-overwrite-toggle]");
+    if (!button) return;
+    button.setAttribute("aria-pressed", biliState.overwriteExisting ? "true" : "false");
+    button.title = biliState.overwriteExisting ? "会重新解析并覆盖已存在的 Bilibili 笔记" : "默认跳过已生成笔记的视频";
+  }
+
+  function renderBiliImportControls() {
+    const importButton = learningNode("[data-bili-import-selected]");
+    const cancelButton = learningNode("[data-bili-cancel-import]");
+    if (importButton) {
+      importButton.disabled = Boolean(biliState.importRunning);
+      importButton.textContent = biliState.importRunning ? "生成中" : "生成笔记";
+    }
+    if (cancelButton) {
+      cancelButton.hidden = !biliState.importRunning;
+      cancelButton.disabled = false;
+    }
+  }
+
+  function setBiliLog(message, tone = "") {
+    const node = learningNode("[data-bili-import-log]");
+    if (!node) return;
+    biliState.importLog = { message, tone };
+    node.hidden = false;
+    node.className = `bili-import-log ${tone}`;
+    node.innerHTML = message;
+    persistLearningState();
+  }
+
+  function biliProgressMarkup(label, current, total, detail = "") {
+    const numericTotal = Number(total) || 0;
+    const percent = numericTotal ? Math.max(3, Math.min(100, Math.round((current / numericTotal) * 100))) : 18;
+    const count = numericTotal ? `${Math.min(current, numericTotal)} / ${numericTotal}` : `${current}`;
+    return `
+      <div class="bili-progress">
+        <div class="bili-progress-head">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(count)}</strong>
+        </div>
+        <div class="bili-progress-track"><span style="width:${percent}%"></span></div>
+        ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+      </div>
+    `;
+  }
+
+  async function loadBiliSession() {
+    const data = await requestJson("/api/bilibili/session");
+    biliState.loggedIn = Boolean(data.logged_in);
+    biliState.user = data.user || null;
+    renderBiliLogin();
+    renderBiliFolders();
+    persistLearningState();
+  }
+
+  async function startBiliLogin() {
+    const node = learningNode("[data-bili-login-state]");
+    if (!node) return;
+    clearInterval(biliState.pollTimer);
+    node.innerHTML = `<p class="muted-text">正在生成二维码...</p>`;
+    const data = await requestJson("/api/bilibili/qrcode");
+    node.innerHTML = `
+      <div class="bili-qr">
+        <img src="${escapeHtml(data.qrcode_image_base64)}" alt="Bilibili 登录二维码">
+        <p data-bili-qr-status>请用 Bilibili 扫码确认登录。</p>
+      </div>
+    `;
+    biliState.pollTimer = setInterval(() => pollBiliLogin(data.qrcode_key), 1800);
+  }
+
+  async function pollBiliLogin(key) {
+    const status = learningNode("[data-bili-qr-status]");
+    try {
+      const data = await requestJson(`/api/bilibili/qrcode/poll/${encodeURIComponent(key)}`);
+      if (status) status.textContent = data.message || data.status;
+      if (data.status === "confirmed") {
+        clearInterval(biliState.pollTimer);
+        biliState.loggedIn = true;
+        biliState.user = data.user || null;
+        renderBiliLogin();
+        persistLearningState();
+        await loadBiliFolders();
+      } else if (data.status === "expired") {
+        clearInterval(biliState.pollTimer);
+      }
+    } catch (error) {
+      clearInterval(biliState.pollTimer);
+      if (status) status.textContent = String(error.message || error).slice(0, 140);
+    }
+  }
+
+  async function loadBiliFolders() {
+    if (!biliState.loggedIn) await loadBiliSession();
+    if (!biliState.loggedIn) {
+      await modalMessage("需要登录", "请先扫码登录 Bilibili。");
+      return;
+    }
+    const node = learningNode("[data-bili-folder-list]");
+    if (node) node.innerHTML = `<p class="muted-text">正在读取收藏夹...</p>`;
+    const data = await requestJson("/api/bilibili/favorites");
+    biliState.folders = data.folders || [];
+    renderBiliFolders();
+    persistLearningState();
+  }
+
+  async function loadBiliVideos(mediaId) {
+    const folder = biliState.folders.find((item) => String(item.media_id) === String(mediaId));
+    biliState.selectedFolder = folder || { media_id: mediaId, title: String(mediaId) };
+    biliState.videos = [];
+    biliState.importLog = null;
+    persistLearningState();
+    renderBiliFolders();
+    const list = learningNode("[data-bili-video-list]");
+    const expectedTotal = Number(biliState.selectedFolder.media_count) || 0;
+    if (list) list.innerHTML = biliProgressMarkup("正在读取收藏夹视频", 0, expectedTotal, "逐页读取中...");
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const data = await requestJson(`/api/bilibili/favorites/${encodeURIComponent(mediaId)}/videos?page=${page}`);
+      biliState.videos = [...biliState.videos, ...(data.videos || [])];
+      hasMore = Boolean(data.has_more);
+      if (list) {
+        const total = expectedTotal || biliState.videos.length + (hasMore ? 20 : 0);
+        list.innerHTML = biliProgressMarkup("正在读取收藏夹视频", biliState.videos.length, total, hasMore ? `已读取第 ${page} 页` : "读取完成");
+      }
+      page += 1;
+    }
+    renderBiliVideos();
+    persistLearningState();
+  }
+
+  async function importSelectedBiliVideos() {
+    if (!biliState.selectedFolder) {
+      await modalMessage("未选择收藏夹", "请先选择一个收藏夹。");
+      return;
+    }
+    const selected = Array.from(learningApp.querySelectorAll("[data-bili-video-check]:checked")).map((input) => biliState.videos[Number(input.dataset.biliVideoCheck)]);
+    if (!selected.length) {
+      await modalMessage("未选择视频", "请至少选择一个视频。");
+      return;
+    }
+    const skippedExisting = biliState.overwriteExisting ? [] : selected.filter((video) => video?.note_id && !video?.needs_regeneration);
+    const toImport = biliState.overwriteExisting ? selected : selected.filter((video) => !video?.note_id || video?.needs_regeneration);
+    if (!toImport.length) {
+      const rows = skippedExisting.map((video) => `<li><strong>已跳过</strong><span>${escapeHtml(video.title || video.bvid || "")}</span><small>已生成的视频默认跳过</small></li>`);
+      setBiliLog(`${biliProgressMarkup("没有需要生成的笔记", selected.length, selected.length, "已生成的视频默认跳过。打开“重新生成”后可覆盖更新。")}<ol>${rows.join("")}</ol>`, "done");
+      renderBiliVideos();
+      persistLearningState();
+      return;
+    }
+    setBiliLog(biliProgressMarkup("正在解析并生成笔记", 0, toImport.length, skippedExisting.length ? `已跳过 ${skippedExisting.length} 个已生成视频，后台任务准备开始...` : "后台任务准备开始..."));
+    const data = await requestJson("/api/bilibili/import-jobs", {
+      method: "POST",
+      body: JSON.stringify({
+        media_id: biliState.selectedFolder.media_id,
+        folder_title: biliState.selectedFolder.title,
+        videos: toImport,
+        overwrite: biliState.overwriteExisting,
+      }),
+    });
+    applyBiliImportJob(data.job, { skippedCount: skippedExisting.length });
+    startBiliJobPolling();
+  }
+
+  function applyBiliImportJob(job, options = {}) {
+    if (!job) return;
+    const running = ["queued", "running", "canceling"].includes(job.status);
+    biliState.importJobId = job.id || biliState.importJobId;
+    biliState.importRunning = running;
+    const done = Number(job.done) || 0;
+    const total = Number(job.total) || 0;
+    const statusLabel = job.status === "done" ? "解析完成" : job.status === "failed" ? "解析失败" : job.status === "canceled" ? "已中断" : "正在解析并生成笔记";
+    const detail = job.message || job.current_title || "";
+    const rows = (job.items || []).map((item) => {
+      const label = item.status === "imported" ? "已生成" : item.status === "skipped" ? "已跳过" : "失败";
+      return `<li><strong>${escapeHtml(label)}</strong><span>${escapeHtml(item.title || item.bvid || "")}</span><small>${escapeHtml(item.reason || item.error || item.summary_error || item.trust_reason || biliContentStatus(item) || "")}</small></li>`;
+    });
+    const skipped = options.skippedCount ? `已跳过 ${options.skippedCount} 个已生成视频。` : "";
+    const tone = job.status === "done" ? "done" : job.status === "failed" || job.status === "canceled" ? "warn" : "";
+    setBiliLog(`${biliProgressMarkup(statusLabel, done, total, [skipped, detail].filter(Boolean).join(" "))}${rows.length ? `<ol>${rows.join("")}</ol>` : ""}`, tone);
+    for (const item of job.items || []) {
+      const stored = biliState.videos.find((candidate) => candidate.bvid === item.bvid);
+      if (stored && item.status === "imported") {
+        stored.note_id = item.note_id;
+        stored.title = item.title || stored.title;
+        stored.content_source = item.content_source;
+        stored.content_trust = item.content_trust;
+        stored.trust_reason = item.trust_reason;
+        stored.needs_regeneration = false;
+      }
+    }
+    renderBiliImportControls();
+    renderBiliVideos();
+    persistLearningState();
+    if (!running) stopBiliJobPolling();
+  }
+
+  async function loadCurrentBiliImportJob() {
+    try {
+      const data = await requestJson("/api/bilibili/import-jobs/current");
+      if (data.job) {
+        applyBiliImportJob(data.job);
+        if (biliState.importRunning) startBiliJobPolling();
+      } else {
+        biliState.importRunning = false;
+        renderBiliImportControls();
+      }
+    } catch {
+      renderBiliImportControls();
+    }
+  }
+
+  async function pollBiliImportJob() {
+    if (!biliState.importJobId) {
+      stopBiliJobPolling();
+      return;
+    }
+    try {
+      const data = await requestJson(`/api/bilibili/import-jobs/${encodeURIComponent(biliState.importJobId)}`);
+      applyBiliImportJob(data.job);
+    } catch (error) {
+      setBiliLog(biliProgressMarkup("进度读取失败", 0, 0, String(error.message || error).slice(0, 160)), "warn");
+      stopBiliJobPolling();
+      biliState.importRunning = false;
+      renderBiliImportControls();
+    }
+  }
+
+  function startBiliJobPolling() {
+    stopBiliJobPolling();
+    if (!biliState.importJobId) return;
+    biliState.importRunning = true;
+    renderBiliImportControls();
+    biliState.jobPollTimer = setInterval(() => {
+      pollBiliImportJob();
+    }, 1200);
+    pollBiliImportJob();
+  }
+
+  function stopBiliJobPolling() {
+    if (biliState.jobPollTimer) clearInterval(biliState.jobPollTimer);
+    biliState.jobPollTimer = null;
+  }
+
+  async function cancelBiliImportJob() {
+    if (!biliState.importJobId) return;
+    const ok = await modalConfirm("中断解析", "会停止后台继续解析。已经生成的笔记会保留，正在处理中的视频可能需要等请求结束后停止。", "中断");
+    if (!ok) return;
+    const data = await requestJson(`/api/bilibili/import-jobs/${encodeURIComponent(biliState.importJobId)}/cancel`, { method: "POST", body: "{}" });
+    applyBiliImportJob(data.job);
   }
 
   async function reloadNotes(query = app?.querySelector("[data-note-search]")?.value || "") {
@@ -734,6 +1146,74 @@
       if (!note || !["Enter", " "].includes(event.key)) return;
       event.preventDefault();
       note.click();
+    });
+  }
+
+  if (learningApp) {
+    restoreLearningState();
+    renderBiliLogin();
+    renderBiliFolders();
+    renderBiliVideos();
+    renderBiliOverwriteToggle();
+    renderBiliImportControls();
+    renderBiliLogFromState();
+    loadBiliSession().catch((error) => {
+      const node = learningNode("[data-bili-login-state]");
+      if (node) node.innerHTML = `<p class="muted-text">${escapeHtml(String(error.message || error).slice(0, 160))}</p>`;
+    });
+    loadCurrentBiliImportJob();
+    learningApp.addEventListener("click", async (event) => {
+      const start = event.target.closest("[data-bili-start-login]");
+      if (start) {
+        await startBiliLogin();
+        return;
+      }
+      if (event.target.closest("[data-bili-refresh-session]")) {
+        await loadBiliSession();
+        return;
+      }
+      if (event.target.closest("[data-bili-load-folders]")) {
+        await loadBiliFolders();
+        return;
+      }
+      if (event.target.closest("[data-bili-logout]")) {
+        await requestJson("/api/bilibili/logout", { method: "POST", body: "{}" });
+        clearLearningState();
+        stopBiliJobPolling();
+        biliState = { loggedIn: false, user: null, folders: [], selectedFolder: null, videos: [], overwriteExisting: biliState.overwriteExisting, importLog: null, importJobId: null, importRunning: false, pollTimer: null, jobPollTimer: null };
+        renderBiliLogin();
+        renderBiliFolders();
+        renderBiliVideos();
+        renderBiliOverwriteToggle();
+        renderBiliImportControls();
+        const log = learningNode("[data-bili-import-log]");
+        if (log) log.hidden = true;
+        return;
+      }
+      const folder = event.target.closest("[data-bili-folder]");
+      if (folder) {
+        await loadBiliVideos(folder.dataset.biliFolder);
+        return;
+      }
+      if (event.target.closest("[data-bili-select-all]")) {
+        learningApp.querySelectorAll("[data-bili-video-check]").forEach((input) => {
+          input.checked = true;
+        });
+        return;
+      }
+      if (event.target.closest("[data-bili-overwrite-toggle]")) {
+        biliState.overwriteExisting = !biliState.overwriteExisting;
+        renderBiliOverwriteToggle();
+        persistLearningState();
+        return;
+      }
+      if (event.target.closest("[data-bili-import-selected]")) {
+        await importSelectedBiliVideos();
+        return;
+      }
+      if (event.target.closest("[data-bili-cancel-import]")) {
+        await cancelBiliImportJob();
+      }
     });
   }
 

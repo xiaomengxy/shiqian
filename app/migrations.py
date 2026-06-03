@@ -27,6 +27,10 @@ def ensure_runtime_schema(engine: Engine) -> None:
             _ensure_notes(conn)
         else:
             _ensure_notes_columns(conn)
+        if "bilibili_sessions" not in tables:
+            _ensure_bilibili_sessions(conn)
+        if "bilibili_video_cache" not in tables:
+            _ensure_bilibili_video_cache(conn)
         _sync_note_directories_from_paths(conn)
 
 
@@ -217,6 +221,56 @@ def _ensure_notes_columns(conn) -> None:
         conn.exec_driver_sql("ALTER TABLE notes ADD COLUMN folder_path VARCHAR(600) NOT NULL DEFAULT ''")
     conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_notes_directory_id ON notes (directory_id)")
     conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_notes_folder_path ON notes (folder_path)")
+
+
+def _ensure_bilibili_sessions(conn) -> None:
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS bilibili_sessions (
+            id INTEGER NOT NULL PRIMARY KEY,
+            session_id VARCHAR(80) NOT NULL UNIQUE,
+            bili_mid INTEGER,
+            bili_uname VARCHAR(160),
+            bili_face TEXT,
+            sessdata TEXT,
+            bili_jct TEXT,
+            dedeuserid VARCHAR(80),
+            refresh_token TEXT,
+            is_valid BOOLEAN NOT NULL DEFAULT 1,
+            last_active_at DATETIME NOT NULL,
+            created_at DATETIME NOT NULL
+        )
+        """
+    )
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_bilibili_sessions_session_id ON bilibili_sessions (session_id)")
+
+
+def _ensure_bilibili_video_cache(conn) -> None:
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS bilibili_video_cache (
+            id INTEGER NOT NULL PRIMARY KEY,
+            bvid VARCHAR(32) NOT NULL UNIQUE,
+            cid INTEGER,
+            aid INTEGER,
+            title VARCHAR(500) NOT NULL,
+            description TEXT,
+            owner_name VARCHAR(160),
+            owner_mid INTEGER,
+            duration INTEGER,
+            cover_url TEXT,
+            content_text TEXT,
+            content_source VARCHAR(40),
+            note_id INTEGER,
+            process_error TEXT,
+            meta JSON NOT NULL DEFAULT '{}',
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            FOREIGN KEY(note_id) REFERENCES notes (id)
+        )
+        """
+    )
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_bilibili_video_cache_bvid ON bilibili_video_cache (bvid)")
 
 
 def _sync_note_directories_from_paths(conn) -> None:

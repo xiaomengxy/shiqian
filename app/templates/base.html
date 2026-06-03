@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}拾签{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v=notes-learning1">
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}?v=notes-learning8">
   </head>
   {% set current = active_nav if active_nav is defined else "" %}
   <body data-active-nav="{{ current }}">
@@ -25,7 +25,7 @@
     <main>
       {% block content %}{% endblock %}
     </main>
-    <script src="{{ url_for('static', path='/vendor/markdown-it.min.js') }}?v=notes-learning1"></script>
-    <script src="{{ url_for('static', path='/app.js') }}?v=notes-learning1" defer></script>
+    <script src="{{ url_for('static', path='/vendor/markdown-it.min.js') }}?v=notes-learning8"></script>
+    <script src="{{ url_for('static', path='/app.js') }}?v=notes-learning8" defer></script>
   </body>
 </html>

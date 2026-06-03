@@ -19,6 +19,11 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -26,7 +31,11 @@
 body {
   background: var(--bg);
   color: var(--ink);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
   margin: 0;
+  overflow: hidden;
 }
 
 body.is-tree-dragging {
@@ -136,6 +145,11 @@ textarea:focus {
   z-index: 5;
 }
 
+main {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .brand {
   align-items: center;
   color: var(--ink);
@@ -201,7 +215,9 @@ textarea:focus {
 .notes-app {
   display: grid;
   grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
-  min-height: calc(100vh - 46px);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .notes-sidebar {
@@ -210,7 +226,9 @@ textarea:focus {
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 12px;
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
   padding: 18px 14px 14px;
 }
 
@@ -290,7 +308,7 @@ h1 {
 
 .note-tree {
   min-height: 0;
-  overflow-y: auto;
+  overflow: auto;
   padding: 0 4px 8px 0;
 }
 
@@ -429,7 +447,10 @@ h1 {
 
 .note-stage {
   background: var(--paper);
+  min-height: 0;
   min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: clamp(22px, 5vw, 64px);
 }
 
@@ -489,6 +510,7 @@ h1 {
 .markdown-body {
   font-size: 17px;
   line-height: 1.85;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -553,6 +575,7 @@ h1 {
   background: #f6f8fa;
   border: 1px solid #d8dee4;
   border-radius: 6px;
+  max-width: 100%;
   overflow-x: auto;
   padding: 14px;
 }
@@ -595,14 +618,19 @@ h1 {
 .editor-panel textarea {
   font-family: "Cascadia Mono", Consolas, "Noto Sans Mono", monospace;
   min-height: 440px;
+  max-width: 100%;
 }
 
 .trash-page,
 .settings-page,
 .learning-page {
+  height: 100%;
   margin: 0 auto;
   max-width: 980px;
+  min-height: 0;
+  overflow: auto;
   padding: clamp(22px, 5vw, 54px);
+  width: 100%;
 }
 
 .page-head {
@@ -658,6 +686,20 @@ h1 {
 }
 
 .delete-entry-switch[aria-pressed="true"] .switch-track span {
+  transform: translateX(14px);
+}
+
+.bili-overwrite-switch {
+  gap: 8px;
+  padding-left: 10px;
+  padding-right: 9px;
+}
+
+.bili-overwrite-switch[aria-pressed="true"] .switch-track {
+  background: #59636e;
+}
+
+.bili-overwrite-switch[aria-pressed="true"] .switch-track span {
   transform: translateX(14px);
 }
 
@@ -743,6 +785,289 @@ h1 {
   height: 26px;
   justify-content: center;
   width: 26px;
+}
+
+.learning-workbench {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.learning-side {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-height: 0;
+}
+
+.learning-box,
+.learning-main {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.learning-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.learning-side,
+.learning-main {
+  overflow: auto;
+}
+
+.learning-main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.learning-box-head {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+}
+
+.learning-box-head h2 {
+  font-size: 18px;
+  margin-bottom: 0;
+}
+
+.muted-text {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.bili-login-state {
+  display: grid;
+  gap: 10px;
+}
+
+.bili-user {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 38px minmax(0, 1fr);
+}
+
+.bili-user img,
+.bili-avatar-fallback {
+  border-radius: 50%;
+  height: 38px;
+  width: 38px;
+}
+
+.bili-avatar-fallback {
+  align-items: center;
+  background: var(--shell);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  display: inline-flex;
+  font-weight: 700;
+  justify-content: center;
+}
+
+.bili-user strong,
+.bili-user small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bili-user small {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.bili-qr {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  text-align: center;
+}
+
+.bili-qr img {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  height: 188px;
+  width: 188px;
+}
+
+.bili-folder-list,
+.bili-video-list {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+}
+
+.bili-folder-list {
+  overflow: visible;
+}
+
+.bili-video-list {
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.bili-folder {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink);
+  display: grid;
+  font-weight: 500;
+  grid-template-columns: minmax(0, 1fr) auto;
+  justify-content: stretch;
+  min-height: 32px;
+  padding: 6px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.bili-folder span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bili-folder small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.bili-folder:hover,
+.bili-folder.active {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--ink);
+}
+
+.bili-video {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-height: 52px;
+  padding: 9px 2px;
+}
+
+.bili-video:last-child {
+  border-bottom: 0;
+}
+
+.bili-video input {
+  min-height: auto;
+  width: 16px;
+}
+
+.bili-video strong,
+.bili-video small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bili-video small {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.bili-import-log {
+  background: var(--shell);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  margin-top: 12px;
+  max-height: min(28dvh, 260px);
+  overflow: auto;
+  padding: 12px;
+}
+
+.bili-import-log.done {
+  background: #f4f8f5;
+}
+
+.bili-progress {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bili-progress-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.bili-progress-head span,
+.bili-progress-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bili-progress-head strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.bili-progress-track {
+  background: #dfe2e3;
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.bili-progress-track span {
+  background: #59636e;
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transition: width 0.18s ease;
+}
+
+.bili-progress p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.bili-import-log ol {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bili-import-log li {
+  display: grid;
+  gap: 4px;
+}
+
+.bili-import-log strong {
+  color: var(--ink);
+}
+
+.bili-import-log span,
+.bili-import-log small {
+  overflow-wrap: anywhere;
 }
 
 .settings-grid {
@@ -951,12 +1276,13 @@ h1 {
 
   .notes-app {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(280px, 50dvh) minmax(0, 1fr);
   }
 
   .notes-sidebar {
     border-bottom: 1px solid var(--line);
     border-right: 0;
-    max-height: 52vh;
+    max-height: none;
   }
 
   .note-stage,
@@ -998,8 +1324,18 @@ h1 {
   .page-actions,
   .settings-grid,
   .settings-meta,
-  .learning-panel {
+  .learning-panel,
+  .learning-workbench {
     grid-template-columns: 1fr;
+  }
+
+  .learning-workbench {
+    grid-template-rows: minmax(132px, 24dvh) minmax(0, 1fr);
+  }
+
+  .learning-side,
+  .learning-main {
+    min-height: 0;
   }
 
   .page-actions {

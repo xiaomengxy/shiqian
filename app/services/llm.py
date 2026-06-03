@@ -243,7 +243,7 @@ def _openai_suggestion(extracted: dict[str, Any], existing_directories: list[str
     try:
         with httpx.Client(timeout=40) as client:
             response = client.post(
-                "https://api.openai.com/v1/responses",
+                _openai_responses_url(settings),
                 headers={"Authorization": f"Bearer {settings.openai_api_key}"},
                 json=payload,
             )
@@ -327,7 +327,7 @@ def _openai_rewrite_summary(
     try:
         with httpx.Client(timeout=40) as client:
             response = client.post(
-                "https://api.openai.com/v1/responses",
+                _openai_responses_url(settings),
                 headers={"Authorization": f"Bearer {settings.openai_api_key}"},
                 json=payload,
             )
@@ -434,6 +434,13 @@ def _extract_openai_output_text(data: dict[str, Any]) -> str:
             if text:
                 chunks.append(text)
     return "\n".join(chunks)
+
+
+def _openai_responses_url(settings: Settings) -> str:
+    base_url = (getattr(settings, "openai_base_url", "") or "https://api.openai.com/v1").strip().rstrip("/")
+    if base_url.endswith("/responses"):
+        return base_url
+    return f"{base_url}/responses"
 
 
 def _heuristic_suggestion(extracted: dict[str, Any], existing_directories: list[str]) -> dict[str, Any]:

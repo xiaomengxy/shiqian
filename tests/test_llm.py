@@ -84,6 +84,38 @@ def test_deepseek_json_response_is_normalized(monkeypatch):
     assert result.suggestion["recommended_directory_path"] == "Research/Web"
 
 
+def test_openai_uses_configured_base_url(monkeypatch):
+    seen = {}
+
+    def fake_post(self, url, headers=None, json=None):
+        seen["url"] = url
+        return httpx.Response(
+            200,
+            json={
+                "output_text": (
+                    '{"name":"Name","summary":"Summary","tags":["AI"],"keywords":["openai"],'
+                    '"content_type":"webpage","recommended_directory_path":"技术/AI",'
+                    '"directory_reason":"match","confidence":0.9}'
+                )
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    settings = Settings(
+        llm_provider="openai",
+        openai_api_key="sk-test",
+        openai_model="gpt-5-mini",
+        openai_base_url="https://proxy.example.com/v1",
+    )
+
+    result = generate_suggestion({"title": "Title", "source_domain": "example.com"}, [], "openai", settings)
+
+    assert result.error is None
+    assert seen["url"] == "https://proxy.example.com/v1/responses"
+    assert result.suggestion["name"] == "Name"
+
+
 def test_low_confidence_directory_is_uncategorized():
     suggestion = normalize_suggestion(
         {

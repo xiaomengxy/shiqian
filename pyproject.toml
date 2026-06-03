@@ -1,7 +1,7 @@
 [project]
 name = "shiqian-manager"
 version = "0.1.0"
-description = "A local AI-assisted capture and tagging manager."
+description = "A local Markdown notes manager with Bilibili learning import."
 requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.13",
@@ -11,6 +11,7 @@ dependencies = [
     "jinja2>=3.1",
     "pydantic-settings>=2.5",
     "python-multipart>=0.0.9",
+    "qrcode[pil]>=7.4",
     "sqlalchemy>=2.0",
     "uvicorn[standard]>=0.30",
 ]

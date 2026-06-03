@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Table, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -81,6 +81,47 @@ class Note(Base):
     )
 
     directory: Mapped[Directory | None] = relationship(back_populates="notes")
+
+
+class BilibiliSession(Base):
+    __tablename__ = "bilibili_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    bili_mid: Mapped[int | None] = mapped_column(Integer)
+    bili_uname: Mapped[str | None] = mapped_column(String(160))
+    bili_face: Mapped[str | None] = mapped_column(Text)
+    sessdata: Mapped[str | None] = mapped_column(Text)
+    bili_jct: Mapped[str | None] = mapped_column(Text)
+    dedeuserid: Mapped[str | None] = mapped_column(String(80))
+    refresh_token: Mapped[str | None] = mapped_column(Text)
+    is_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_active_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class BilibiliVideoCache(Base):
+    __tablename__ = "bilibili_video_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bvid: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    cid: Mapped[int | None] = mapped_column(Integer)
+    aid: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    owner_name: Mapped[str | None] = mapped_column(String(160))
+    owner_mid: Mapped[int | None] = mapped_column(Integer)
+    duration: Mapped[int | None] = mapped_column(Integer)
+    cover_url: Mapped[str | None] = mapped_column(Text)
+    content_text: Mapped[str | None] = mapped_column(Text)
+    content_source: Mapped[str | None] = mapped_column(String(40))
+    note_id: Mapped[int | None] = mapped_column(ForeignKey("notes.id"))
+    process_error: Mapped[str | None] = mapped_column(Text)
+    meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
 
 
 class Tag(Base):

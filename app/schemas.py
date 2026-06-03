@@ -38,3 +38,22 @@ class MoveDirectoryRequest(BaseModel):
 
 class MoveNoteRequest(BaseModel):
     directory_id: int | None = None
+
+
+class BilibiliImportVideo(BaseModel):
+    bvid: str
+    title: str = ""
+    cid: int | None = None
+    aid: int | None = None
+    cover: str | None = None
+    duration: int | None = None
+    owner_name: str | None = None
+    owner_mid: int | None = None
+    description: str = ""
+
+
+class BilibiliImportRequest(BaseModel):
+    media_id: int
+    folder_title: str = ""
+    videos: list[BilibiliImportVideo]
+    overwrite: bool = False
